@@ -15,16 +15,20 @@ index 2872389..76193ad 100644
  
  include $(THEOS_MAKE_PATH)/tweak.mk
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..1fb7eb5 100644
+index 9bc858c..2e4771b 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -16,6 +16,24 @@
+@@ -16,6 +16,31 @@
  #import <Security/Security.h>
  #import <CoreVideo/CoreVideo.h>
  #import <VideoToolbox/VideoToolbox.h>
 +#import <stdarg.h>
 +
 +// ===== [PATCH-v32] UI 控制/状态接口 (VCamBypassUI 模块调用) =====
++// .xm 编译为 C++, 跨模块接口必须 extern "C" 以匹配 ObjC 模块的 C 符号
++#ifdef __cplusplus
++extern "C" {
++#endif
 +static int gReplaceEnabled    = 1;                       // 画面替换总开关
 +static int gCameraPassEnabled = 1;                       // 相机真画面 (photoFlag=1 跳过)
 +static uint32_t gPatternColor = 0xFFFF0000U;             // 测试图案颜色 BGRA
@@ -40,10 +44,13 @@ index 9bc858c..1fb7eb5 100644
 +    if (gLogCount < 64) gLogCount++;
 +}
 +void vcap_ui_mount(void);
++#ifdef __cplusplus
++}
++#endif
  
  // ============== Replacement IMPs ==============
  
-@@ -95,7 +113,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
+@@ -95,7 +120,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
          uint32_t *row = (uint32_t *)(base + y * bpr);
          for (size_t x = 0; x < w; x++) {
              // BGRA order: B=00 G=00 R=FF A=FF → little-endian uint32 = 0xFFFF0000
@@ -52,7 +59,7 @@ index 9bc858c..1fb7eb5 100644
          }
      }
      CVPixelBufferUnlockBaseAddress(buf, 0);
-@@ -110,6 +128,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
+@@ -110,6 +135,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
  // 3rd party 路径正常 transfer (看到假画面).
  static void v23_doReplace(CVPixelBufferRef dst) {
      if (!dst) return;
@@ -60,7 +67,7 @@ index 9bc858c..1fb7eb5 100644
      size_t w = CVPixelBufferGetWidth(dst);
      size_t h = CVPixelBufferGetHeight(dst);
      if (w == 0 || h == 0) return;
-@@ -133,7 +152,7 @@ static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _
+@@ -133,7 +159,7 @@ static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _
      // v26: Apple Camera (flag=1) 路径下 BWPhotoEncoder.render orig 对 modified dst 敏感
      // → 黑屏. 跳过 transfer 让 Apple Camera 显示真画面 (no crash, no replacement).
      // 3rd party 应该不会到这里 (它走 renderReplacementToPixelBuffer:, 不带 flag)
@@ -69,7 +76,7 @@ index 9bc858c..1fb7eb5 100644
      v23_doReplace(pb);
  }
  
-@@ -249,6 +268,7 @@ static void applyCHooks(const struct mach_header *mh) {
+@@ -249,6 +275,7 @@ static void applyCHooks(const struct mach_header *mh) {
      void *gate2_addr = (void *)((uintptr_t)mh + 0xe9f4);
      @try {
          MSHookFunction(gate2_addr, (void *)my_gate2, (void **)&orig_gate2);
@@ -77,7 +84,7 @@ index 9bc858c..1fb7eb5 100644
          NSLog(@"[v27bypass] gate2 @ %p hooked", gate2_addr);
      } @catch (NSException *e) {
          NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
-@@ -259,6 +279,7 @@ static void applyCHooks(const struct mach_header *mh) {
+@@ -259,6 +286,7 @@ static void applyCHooks(const struct mach_header *mh) {
      if (sec_ptr && !orig_SecKeyVerifySig) {
          @try {
              MSHookFunction(sec_ptr, (void *)my_SecKeyVerifySig, (void **)&orig_SecKeyVerifySig);
@@ -85,7 +92,7 @@ index 9bc858c..1fb7eb5 100644
              NSLog(@"[v27bypass] SecKeyVerifySignature hooked");
          } @catch (NSException *e) {
              NSLog(@"[v27bypass] SecKeyVerifySig hook FAILED: %@", e);
-@@ -271,6 +292,7 @@ static void applyCHooks(const struct mach_header *mh) {
+@@ -271,6 +299,7 @@ static void applyCHooks(const struct mach_header *mh) {
      void *photoenc_addr = (void *)((uintptr_t)mh + 0xe240);
      @try {
          MSHookFunction(photoenc_addr, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
@@ -93,13 +100,16 @@ index 9bc858c..1fb7eb5 100644
          NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
      } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
  }
-@@ -367,4 +389,46 @@ static void v16_init(void) {
+@@ -367,4 +396,52 @@ static void v16_init(void) {
      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
                     dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
                     ^{ tryObjCSwizzle(100); });
 +    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
 +}
 +// ===== [PATCH-v32] 接口实现 (VCamBypassUI 调用) =====
++#ifdef __cplusplus
++extern "C" {
++#endif
 +BOOL vcam_bypass_status(int *swizzled, int *cfhooks, int *gate2, int *seckey, int *photoenc) {
 +    if (swizzled) *swizzled = s_didObjCSwizzle;
 +    if (cfhooks)  *cfhooks  = s_didCFunctionHooks;
@@ -131,7 +141,7 @@ index 9bc858c..1fb7eb5 100644
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
 +                   ^{ tryObjCSwizzle(100); });
- }
++}
 +NSString *vcam_bypass_logs(void) {
 +    NSMutableString *m = [NSMutableString new];
 +    for (int i = 0; i < gLogCount; i++) {
@@ -140,4 +150,7 @@ index 9bc858c..1fb7eb5 100644
 +    }
 +    return m;
 +}
++#ifdef __cplusplus
+ }
++#endif
 \ No newline at end of file

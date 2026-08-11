@@ -12,6 +12,9 @@
 - fix: VCamBypassUI.m 前向声明全部移至文件顶部；UIScreen 无 center 属性改用
   bounds 计算；显式 #import <QuartzCore/QuartzCore.h> 提供 CACurrentMediaTime。
 - feat: CI 增补构建日志工件 (build.log, 失败时也上传) 便于定位编译错误。
+- fix: UI 补丁接口全部加 extern "C" — .xm 编译为 C++ (符号 mangled), 与
+  VCamBypassUI.m 的 C 符号匹配, 消除 8 个 undefined symbol 链接错误。
+- feat: CI 失败时自动把 build.log 回传 ci-logs 分支 (GITHUB_TOKEN, 不触发构建)。
 
 ## v1.0.1-v32 (2026-08-11)
 

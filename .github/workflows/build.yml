@@ -52,6 +52,17 @@ jobs:
           path: build.log
           retention-days: 30
 
+      - name: 失败时回传 build.log 到 ci-logs 分支
+        if: failure()
+        run: |
+          git fetch origin ci-logs 2>/dev/null || true
+          git checkout -B ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
+          git rm -rf --cached . 2>/dev/null || true
+          git add -f build.log
+          git -c user.name="ci-bot" -c user.email="ci@users.noreply.github.com" commit -m "build log $(date -u +%Y%m%d-%H%M%S)" || true
+          git push --force origin ci-logs
+          git checkout -f main || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: vcam125-bypass-deb
