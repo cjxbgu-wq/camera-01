@@ -9,6 +9,9 @@
   的 `vcap_ui_mount`，消除 undefined symbol 链接错误。
 - fix: VCamBypassUI.m 补全 `vcStatusLine/vcReplaceOn/vcCameraPassOn` 前向声明，
   消除 C99 implicit declaration 编译错误。
+- fix: VCamBypassUI.m 前向声明全部移至文件顶部；UIScreen 无 center 属性改用
+  bounds 计算；显式 #import <QuartzCore/QuartzCore.h> 提供 CACurrentMediaTime。
+- feat: CI 增补构建日志工件 (build.log, 失败时也上传) 便于定位编译错误。
 
 ## v1.0.1-v32 (2026-08-11)
 
