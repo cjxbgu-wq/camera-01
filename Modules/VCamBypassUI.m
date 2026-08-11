@@ -20,6 +20,11 @@
 static NSString *vcStatusLine(void);
 static BOOL vcReplaceOn(void);
 static BOOL vcCameraPassOn(void);
+void vcToggleMenu(void);
+void vcHideMenu(void);
+void vcHideBall(void);
+void vcShowMenu(void);
+void vcShowBall(void);
 
 static UIWindow *sBallWin   = nil;
 static UIWindow *sMenuWin   = nil;
@@ -166,9 +171,6 @@ static NSString *vcStatusLine(void) {
 // ============================================================
 static BOOL vcReplaceOn(void)     { return vcam_bypass_get_replace() != 0; }
 static BOOL vcCameraPassOn(void)  { return vcam_bypass_get_camera_pass() != 0; }
-void vcToggleMenu(void);
-void vcHideMenu(void);
-void vcHideBall(void);
 
 void vcShowBall(void) {
     if (sBallWin) { sBallWin.hidden = NO; return; }
@@ -191,7 +193,8 @@ void vcShowMenu(void) {
     sMenuWin.windowLevel = UIWindowLevelStatusBar + 101;
     sMenuWin.backgroundColor = [UIColor clearColor];
     sMenuWin.rootViewController = [VCMenuVC new];
-    sMenuWin.center = [UIScreen mainScreen].center;
+    CGRect sb = [UIScreen mainScreen].bounds;
+    sMenuWin.center = CGPointMake(CGRectGetMidX(sb), CGRectGetMidY(sb));
     sMenuWin.hidden = NO;
 }
 void vcHideMenu(void) { if (sMenuWin) sMenuWin.hidden = YES; }
