@@ -5,6 +5,10 @@
 ### 修复
 - fix: CI 在构建前自动执行 `patch -p1 < UI-PATCH.diff`，产物直接包含 UI 面板。
   提交 hash 记录于 Actions 日志 (patched.shasum) 供追溯。
+- fix: VCamBypassUI 符号统一 — 安装入口由 `vcam_bypass_ui_install` 改为补丁调用
+  的 `vcap_ui_mount`，消除 undefined symbol 链接错误。
+- fix: VCamBypassUI.m 补全 `vcStatusLine/vcReplaceOn/vcCameraPassOn` 前向声明，
+  消除 C99 implicit declaration 编译错误。
 
 ## v1.0.1-v32 (2026-08-11)
 

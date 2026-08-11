@@ -22,7 +22,7 @@ int  vcam_bypass_get_replace(void);             // 读当前开关
 int  vcam_bypass_get_camera_pass(void);
 
 // ---- UI 入口 (ctor 由补丁调用) ----
-void vcam_bypass_ui_install(void);              // 仅 SpringBoard 生效
+void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
 
 #ifdef __cplusplus
 }

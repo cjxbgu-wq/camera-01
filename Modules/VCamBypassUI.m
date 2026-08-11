@@ -17,6 +17,10 @@
 #define VCB_GRAY  [UIColor colorWithRed:0.60 green:0.65 blue:0.78 alpha:1.0]
 #define VCB_CYAN  [UIColor colorWithRed:0.31 green:0.76 blue:0.97 alpha:1.0]
 
+static NSString *vcStatusLine(void);
+static BOOL vcReplaceOn(void);
+static BOOL vcCameraPassOn(void);
+
 static UIWindow *sBallWin   = nil;
 static UIWindow *sMenuWin   = nil;
 static NSTimeInterval sUpT  = 0;
@@ -219,7 +223,7 @@ static void vcVolumeInstall(void) {
     }));
 }
 
-void vcam_bypass_ui_install(void) {
+void vcap_ui_mount(void) {
     if (sInstalled) return;
     sInstalled = YES;
     NSString *proc = [[NSProcessInfo processInfo] processName];
