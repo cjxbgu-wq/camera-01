@@ -1,0 +1,143 @@
+diff --git a/Makefile b/Makefile
+index 2872389..76193ad 100644
+--- a/Makefile
++++ b/Makefile
+@@ -7,9 +7,9 @@ include $(THEOS)/makefiles/common.mk
+ 
+ TWEAK_NAME = aaa-vcam125-bypass
+ 
+-aaa-vcam125-bypass_FILES      = Tweak.xm
++aaa-vcam125-bypass_FILES      = Tweak.xm Modules/VCamBypassUI.m
+ aaa-vcam125-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
+-aaa-vcam125-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox
++aaa-vcam125-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox UIKit QuartzCore
+ aaa-vcam125-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
+ 
+ include $(THEOS_MAKE_PATH)/tweak.mk
+diff --git a/Tweak.xm b/Tweak.xm
+index 9bc858c..1fb7eb5 100644
+--- a/Tweak.xm
++++ b/Tweak.xm
+@@ -16,6 +16,24 @@
+ #import <Security/Security.h>
+ #import <CoreVideo/CoreVideo.h>
+ #import <VideoToolbox/VideoToolbox.h>
++#import <stdarg.h>
++
++// ===== [PATCH-v32] UI 控制/状态接口 (VCamBypassUI 模块调用) =====
++static int gReplaceEnabled    = 1;                       // 画面替换总开关
++static int gCameraPassEnabled = 1;                       // 相机真画面 (photoFlag=1 跳过)
++static uint32_t gPatternColor = 0xFFFF0000U;             // 测试图案颜色 BGRA
++static int gHookGate2 = 0, gHookSecKey = 0, gHookPhotoEnc = 0; // 逐项 hook 成功标志
++static char gLogBuf[64][192];
++static volatile int gLogHead = 0, gLogCount = 0;
++static void vcam_log2(const char *fmt, ...) {
++    char tmp[192]; va_list ap;
++    va_start(ap, fmt); vsnprintf(tmp, sizeof(tmp), fmt, ap); va_end(ap);
++    NSLog(@"[vcam125bypass] %s", tmp);
++    snprintf(gLogBuf[gLogHead % 64], sizeof(gLogBuf[0]), "[v32] %s", tmp);
++    gLogHead++;
++    if (gLogCount < 64) gLogCount++;
++}
++void vcap_ui_mount(void);
+ 
+ // ============== Replacement IMPs ==============
+ 
+@@ -95,7 +113,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
+         uint32_t *row = (uint32_t *)(base + y * bpr);
+         for (size_t x = 0; x < w; x++) {
+             // BGRA order: B=00 G=00 R=FF A=FF → little-endian uint32 = 0xFFFF0000
+-            row[x] = 0xFFFF0000U;
++            row[x] = gPatternColor;
+         }
+     }
+     CVPixelBufferUnlockBaseAddress(buf, 0);
+@@ -110,6 +128,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
+ // 3rd party 路径正常 transfer (看到假画面).
+ static void v23_doReplace(CVPixelBufferRef dst) {
+     if (!dst) return;
++    if (!gReplaceEnabled) return; // [PATCH-v32] UI 总开关 OFF: 真画面
+     size_t w = CVPixelBufferGetWidth(dst);
+     size_t h = CVPixelBufferGetHeight(dst);
+     if (w == 0 || h == 0) return;
+@@ -133,7 +152,7 @@ static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _
+     // v26: Apple Camera (flag=1) 路径下 BWPhotoEncoder.render orig 对 modified dst 敏感
+     // → 黑屏. 跳过 transfer 让 Apple Camera 显示真画面 (no crash, no replacement).
+     // 3rd party 应该不会到这里 (它走 renderReplacementToPixelBuffer:, 不带 flag)
+-    if (flag) return;
++    if (flag && gCameraPassEnabled) return; // [PATCH-v32] UI 相机真画面开关
+     v23_doReplace(pb);
+ }
+ 
+@@ -249,6 +268,7 @@ static void applyCHooks(const struct mach_header *mh) {
+     void *gate2_addr = (void *)((uintptr_t)mh + 0xe9f4);
+     @try {
+         MSHookFunction(gate2_addr, (void *)my_gate2, (void **)&orig_gate2);
++        gHookGate2 = 1;
+         NSLog(@"[v27bypass] gate2 @ %p hooked", gate2_addr);
+     } @catch (NSException *e) {
+         NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
+@@ -259,6 +279,7 @@ static void applyCHooks(const struct mach_header *mh) {
+     if (sec_ptr && !orig_SecKeyVerifySig) {
+         @try {
+             MSHookFunction(sec_ptr, (void *)my_SecKeyVerifySig, (void **)&orig_SecKeyVerifySig);
++            gHookSecKey = 1;
+             NSLog(@"[v27bypass] SecKeyVerifySignature hooked");
+         } @catch (NSException *e) {
+             NSLog(@"[v27bypass] SecKeyVerifySig hook FAILED: %@", e);
+@@ -271,6 +292,7 @@ static void applyCHooks(const struct mach_header *mh) {
+     void *photoenc_addr = (void *)((uintptr_t)mh + 0xe240);
+     @try {
+         MSHookFunction(photoenc_addr, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
++        gHookPhotoEnc = 1;
+         NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
+     } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
+ }
+@@ -367,4 +389,46 @@ static void v16_init(void) {
+     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
+                    dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+                    ^{ tryObjCSwizzle(100); });
++    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
++}
++// ===== [PATCH-v32] 接口实现 (VCamBypassUI 调用) =====
++BOOL vcam_bypass_status(int *swizzled, int *cfhooks, int *gate2, int *seckey, int *photoenc) {
++    if (swizzled) *swizzled = s_didObjCSwizzle;
++    if (cfhooks)  *cfhooks  = s_didCFunctionHooks;
++    if (gate2)    *gate2    = gHookGate2;
++    if (seckey)   *seckey   = gHookSecKey;
++    if (photoenc) *photoenc = gHookPhotoEnc;
++    return (s_didObjCSwizzle && s_didCFunctionHooks && gHookGate2 && gHookSecKey) ? YES : NO;
++}
++BOOL vcam_bypass_set_replace(BOOL on) {
++    gReplaceEnabled = on ? 1 : 0;
++    vcam_log2("replace=%d", gReplaceEnabled);
++    return YES;
++}
++BOOL vcam_bypass_set_camera_pass(BOOL on) {
++    gCameraPassEnabled = on ? 1 : 0;
++    vcam_log2("camera_pass=%d", gCameraPassEnabled);
++    return YES;
++}
++BOOL vcam_bypass_set_pattern_color(uint32_t c) {
++    gPatternColor = c;
++    if (s_testPattern) { CVPixelBufferRelease(s_testPattern); s_testPattern = NULL; }
++    vcam_log2("pattern=0x%08X", (unsigned)c);
++    return YES;
++}
++int vcam_bypass_get_replace(void)     { return gReplaceEnabled; }
++int vcam_bypass_get_camera_pass(void) { return gCameraPassEnabled; }
++void vcam_bypass_retry(void) {
++    vcam_log2("retry swizzle requested");
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
++                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
++                   ^{ tryObjCSwizzle(100); });
+ }
++NSString *vcam_bypass_logs(void) {
++    NSMutableString *m = [NSMutableString new];
++    for (int i = 0; i < gLogCount; i++) {
++        int idx = ((gLogHead - gLogCount + i) % 64 + 64) % 64;
++        [m appendFormat:@"%s\n", gLogBuf[idx]];
++    }
++    return m;
++}
+\ No newline at end of file

@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## v1.0.1-v32 (2026-08-11)
+
+### 新增
+- feat: UI 控制面板补丁 (UI-PATCH.diff) + 独立模块 Modules/VCamBypassUI.h/.m:
+  悬浮球(三态颜色/拖拽/双击) + 菜单面板 + 音量键入口(SBVolumeControl)。
+- feat: Tweak.xm 增量接口补丁(68 行,+64/-4,仅新增标志与接口函数,零删除零重构):
+  gReplaceEnabled / gCameraPassEnabled / gPatternColor / gHookGate2/SecKey/PhotoEnc /
+  环形日志 vcam_log2 / vcam_bypass_status/set_*/retry/logs 接口。
+- UI 功能键与源码一一对应: 替换开关->v23_doReplace 总闸, 相机真画面->photoFlag=1
+  分支, 图案颜色->v23_getTestPattern 参数化, 重新注入->tryObjCSwizzle(100),
+  导出日志->gLogBuf 环形缓冲, 状态三色->hook 成功标志聚合。
+
+### 说明
+- 源码 Tweak.xm 保持原样入库, 应用补丁方式: patch -p1 < UI-PATCH.diff
+- 回滚: git checkout -- Tweak.xm Makefile 即完全还原
+
 ## v1.0.0-v31 (2026-08-11)
 
 ### 新增
