@@ -1,0 +1,44 @@
+name: Build vcam125 Bypass
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  THEOS: /opt/theos
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装构建依赖 (ldid/xz)
+        run: |
+          brew install ldid xz
+
+      - name: 克隆 Theos
+        run: |
+          for i in 1 2 3 4 5; do
+            sudo git clone --recursive https://github.com/theos/theos $THEOS && break || echo "retry $i/5"
+          done
+          sudo chown -R "$USER" $THEOS
+
+      - name: 下载 iOS 16.5 SDK
+        run: |
+          sudo mkdir -p $THEOS/sdks
+          for i in 1 2 3 4 5; do
+            sudo curl -L --fail -o $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz && break || echo "retry $i/5"
+          done
+          sudo tar -C $THEOS/sdks -xJf $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+
+      - name: 构建安装包
+        run: make package FINALPACKAGE=1 STRIP=1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vcam125-bypass-deb
+          path: packages/*.deb
+          retention-days: 30
