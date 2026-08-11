@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v1.0.2-v32 (2026-08-11)
+
+### 修复
+- fix: CI 在构建前自动执行 `patch -p1 < UI-PATCH.diff`，产物直接包含 UI 面板。
+  提交 hash 记录于 Actions 日志 (patched.shasum) 供追溯。
+
 ## v1.0.1-v32 (2026-08-11)
 
 ### 新增

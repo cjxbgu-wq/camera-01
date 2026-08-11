@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 应用 UI 补丁 (源码不动, 增量合并)
+        run: |
+          patch -p1 < UI-PATCH.diff
+          shasum Tweak.xm Makefile Modules/VCamBypassUI.m | tee patched.shasum
+
       - name: 安装构建依赖 (ldid/xz)
         run: |
           brew install ldid xz
