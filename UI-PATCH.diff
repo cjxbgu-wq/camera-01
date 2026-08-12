@@ -46,7 +46,7 @@ index 3fdd407..8ee95af 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..a6d5214 100644
+index 4fe9530..66c20d9 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,29 @@
@@ -88,7 +88,18 @@ index 4fe9530..a6d5214 100644
  void vcToggleMenu(void);
  void vcHideMenu(void);
  void vcHideBall(void);
-@@ -33,6 +38,15 @@ static NSTimeInterval sUpT  = 0;
+@@ -26,6 +31,10 @@ void vcShowMenu(void);
+ void vcShowBall(void);
+ @class VCBall;
+ @class VCMenuVC;
++// 前向类别: UIHlp (文件更早位置) 需要调用 VCMenuVC 类方法, ARC 下类消息不能只依赖 @class
++@interface VCMenuVC (RefreshHook)
+++ (void)refreshIfVisible;
++@end
+ 
+ static VCBall *sBallView  = nil;
+ static VCMenuVC *sMenuVC  = nil;
+@@ -33,6 +42,15 @@ static NSTimeInterval sUpT  = 0;
  static NSTimeInterval sDnT  = 0;
  static BOOL sInstalled      = NO;
  
@@ -104,7 +115,7 @@ index 4fe9530..a6d5214 100644
  static UIColor *vcStateColor(void) {
      int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
      vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
-@@ -85,6 +99,104 @@ static UIColor *vcStateColor(void) {
+@@ -85,6 +103,104 @@ static UIColor *vcStateColor(void) {
  - (void)onTap { vcToggleMenu(); }
  @end
  
@@ -209,7 +220,7 @@ index 4fe9530..a6d5214 100644
  // ============================================================
  #pragma mark - 菜单面板
  // ============================================================
-@@ -100,36 +212,73 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -100,36 +216,73 @@ static UIColor *vcBgraToUI(uint32_t c) {
                              blue:(c & 0xFF) / 255.0
                             alpha:1.0];
  }
@@ -291,7 +302,7 @@ index 4fe9530..a6d5214 100644
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(7, 2, w - 14, 9)];
      lab.text = l;
      lab.font = [UIFont systemFontOfSize:7];
-@@ -144,45 +293,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -144,45 +297,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
      [host addSubview:box];
      return valL;
  }
@@ -364,24 +375,24 @@ index 4fe9530..a6d5214 100644
 +        b.transform = CGAffineTransformMakeScale(0.9, 0.9);
 +        b.alpha = 0.7;
 +    } completion:nil];
- }
++}
 +- (void)btnUp:(UIButton *)b {
 +    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
 +        b.transform = CGAffineTransformIdentity;
 +        b.alpha = 1.0;
 +    } completion:nil];
-+}
+ }
 +
 +// ---- 状态行 (STATUS 页) ----
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +366,643 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +370,643 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
 +// ---- 信号源文件行 (STATUS 页) ----
-+- (void)mkSrcRow:(UIView *)host y:(CGFloat)y label:(NSString *)l sizeVal:(UILabel **)outVal accent:(UIColor *)c {
++- (void)mkSrcRow:(UIView *)host y:(CGFloat)y label:(NSString *)l sizeVal:(UILabel *__strong *)outVal accent:(UIColor *)c {
 +    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(20, y, 250, 40)];
 +    box.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
 +    box.layer.cornerRadius = 8;
@@ -552,7 +563,7 @@ index 4fe9530..a6d5214 100644
 +    CGFloat gap = 12;
 +    CGFloat lx = 20, rx = 20 + bw + gap;
 +    CGFloat y0 = 8;
-+
+ 
 +    UIButton *b1 = [self mkBtn:@"选择视频" tag:1 x:lx y:y0 w:bw h:bh font:11
 +        from:[UIColor colorWithRed:0.20 green:0.83 blue:0.60 alpha:1]
 +        to:[UIColor colorWithRed:0.02 green:0.59 blue:0.41 alpha:1]];
@@ -574,7 +585,7 @@ index 4fe9530..a6d5214 100644
 +    [pg1 addSubview:b1]; [pg1 addSubview:b2];
 +    [pg1 addSubview:b3]; [pg1 addSubview:b4];
 +    [pg1 addSubview:_btnPause]; [pg1 addSubview:_btnReplace];
- 
++
 +    // 6 色块 3x2 (图案颜色)
      for (int i = 0; i < 6; i++) {
          UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -1146,7 +1157,7 @@ index 4fe9530..a6d5214 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1079,15 @@ void vcToggleMenu(void) {
+@@ -499,21 +1083,15 @@ void vcToggleMenu(void) {
  }
  
  // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
@@ -1171,7 +1182,7 @@ index 4fe9530..a6d5214 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -547,16 +1121,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1125,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
