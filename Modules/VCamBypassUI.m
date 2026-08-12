@@ -17,7 +17,6 @@
 #define VCB_GRAY  [UIColor colorWithRed:0.60 green:0.65 blue:0.78 alpha:1.0]
 #define VCB_CYAN  [UIColor colorWithRed:0.31 green:0.76 blue:0.97 alpha:1.0]
 
-static NSString *vcStatusLine(void);
 static BOOL vcReplaceOn(void);
 static BOOL vcCameraPassOn(void);
 void vcToggleMenu(void);
@@ -89,35 +88,28 @@ static UIColor *vcStateColor(void) {
 // ============================================================
 #pragma mark - 菜单面板
 // ============================================================
-static UILabel *vcLabel(CGRect f, NSString *t, UIColor *c, CGFloat size, BOOL bold) {
-    UILabel *l = [[UILabel alloc] initWithFrame:f];
-    l.text = t; l.textColor = c; l.font = bold ? [UIFont boldSystemFontOfSize:size]
-                                                 : [UIFont systemFontOfSize:size];
-    return l;
-}
-static void vcSwitchRow(UIView *host, CGFloat y, NSString *title, BOOL on, id target, SEL sel) {
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(12, y, 276, 40)];
-    row.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
-    row.layer.cornerRadius = 6;
-    [host addSubview:row];
-    [row addSubview:vcLabel(CGRectMake(12, 10, 170, 20), title, VCB_TXT, 14, NO)];
-    UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(200, 4, 60, 32)];
-    sw.on = on; [sw addTarget:target action:sel forControlEvents:UIControlEventValueChanged];
-    [row addSubview:sw];
-}
-static UIButton *vcActionBtn(UIView *host, CGFloat y, NSString *title, id target, SEL sel) {
-    UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-    b.frame = CGRectMake(12, y, 276, 34);
-    [b setTitle:title forState:UIControlStateNormal];
-    [b setTitleColor:VCB_CYAN forState:UIControlStateNormal];
-    b.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
-    b.layer.cornerRadius = 6;
-    [b addTarget:target action:sel forControlEvents:UIControlEventTouchUpInside];
-    [host addSubview:b];
-    return b;
+// 图案颜色预设 (BGRA, 与 Tweak.xm gPatternColor 一致)
+static uint32_t vcColorTable[] = {
+    0xFFFF0000, 0xFF00FF00, 0xFF0000FF,
+    0xFFFFFF00, 0xFF00FFFF, 0xFFFFFFFF
+};
+static const char *vcColorNames[] = {"RED", "GREEN", "BLUE", "YELLOW", "CYAN", "WHITE"};
+static UIColor *vcBgraToUI(uint32_t c) {
+    return [UIColor colorWithRed:((c >> 8) & 0xFF) / 255.0
+                           green:((c >> 16) & 0xFF) / 255.0
+                            blue:(c & 0xFF) / 255.0
+                           alpha:1.0];
 }
 
-@interface VCMenuVC : UIViewController
+@interface VCMenuVC : UIViewController <UIScrollViewDelegate> {
+    UIScrollView *_pages;
+    UIButton *_tab1, *_tab2, *_tab3, *_tab4;
+    UIView *_colorDot;
+    UIView *_barFill;
+    UISwitch *_swReplace, *_swCamera;
+    UILabel *_chipVal[4];
+    UILabel *_stVal[5];
+}
 @end
 @implementation VCMenuVC
 - (instancetype)init {
@@ -126,40 +118,272 @@ static UIButton *vcActionBtn(UIView *host, CGFloat y, NSString *title, id target
         // 对齐参考工程: 用 topVC present 弹窗, 不建独立 UIWindow
         // (iOS 13+ 无 scene 关联的 UIWindow 不渲染 → 悬浮窗不显示)
         self.modalPresentationStyle = UIModalPresentationFormSheet;
-        self.preferredContentSize = CGSizeMake(300, 330);
+        self.preferredContentSize = CGSizeMake(350, 544);
     }
     return self;
 }
+
+// ---- 组件工厂 (参考工程构图: 深色能量卡片) ----
+- (UIView *)mkChip:(UIView *)host x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w label:(NSString *)l val:(NSString *)v color:(UIColor *)c {
+    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, 26)];
+    box.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
+    box.layer.cornerRadius = 8;
+    box.layer.borderWidth = 1;
+    box.layer.borderColor = VCB_LINE.CGColor;
+    UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(7, 2, w - 14, 9)];
+    lab.text = l;
+    lab.font = [UIFont systemFontOfSize:7];
+    lab.textColor = VCB_GRAY;
+    [box addSubview:lab];
+    UILabel *valL = [[UILabel alloc] initWithFrame:CGRectMake(7, 11, w - 14, 12)];
+    valL.text = v;
+    valL.font = [UIFont boldSystemFontOfSize:8.5];
+    valL.textColor = c;
+    valL.textAlignment = NSTextAlignmentRight;
+    [box addSubview:valL];
+    [host addSubview:box];
+    return valL;
+}
+- (UIButton *)mkTab:(NSString *)t x:(CGFloat)x sel:(BOOL)s tag:(NSInteger)tag {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.frame = CGRectMake(x, 42, 56, 22);
+    b.tag = tag;
+    b.layer.cornerRadius = 11;
+    b.backgroundColor = s ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+    [b setTitle:t forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:10];
+    [b setTitleColor:s ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+    [b addTarget:self action:@selector(switchPage:) forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+- (UIButton *)mkBtn:(NSString *)t x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w h:(CGFloat)h font:(CGFloat)fs color:(UIColor *)c tag:(NSInteger)tag {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.frame = CGRectMake(x, y, w, h);
+    b.tag = tag;
+    b.layer.cornerRadius = 8;
+    b.backgroundColor = c;
+    [b setTitle:t forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:fs];
+    [b addTarget:self action:@selector(btnTap:) forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+- (UIView *)mkSwitchRow:(UIView *)host x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w title:(NSString *)t sw:(UISwitch **)outSw {
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, 44)];
+    row.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+    row.layer.cornerRadius = 8;
+    [host addSubview:row];
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(10, 12, w - 70, 20)];
+    l.text = t;
+    l.font = [UIFont boldSystemFontOfSize:11];
+    l.textColor = VCB_TXT;
+    [row addSubview:l];
+    UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(w - 62, 6, 52, 32)];
+    [row addSubview:sw];
+    if (outSw) *outSw = sw;
+    return row;
+}
+- (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
+    UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
+    lab.text = l;
+    lab.font = [UIFont systemFontOfSize:10];
+    lab.textColor = VCB_GRAY;
+    [host addSubview:lab];
+    UILabel *val = [[UILabel alloc] initWithFrame:CGRectMake(180, y, 96, 14)];
+    val.font = [UIFont boldSystemFontOfSize:10];
+    val.textAlignment = NSTextAlignmentRight;
+    val.tag = tag;
+    [host addSubview:val];
+    _stVal[tag - 1] = val;
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.bounds = CGRectMake(0, 0, 300, 330);
-    self.view.backgroundColor = VCB_PANEL;
-    self.view.layer.cornerRadius = 16;
-    self.view.layer.borderColor = VCB_LINE.CGColor;
-    self.view.layer.borderWidth = 1;
+    self.view.backgroundColor = [UIColor clearColor];
+    self.view.bounds = CGRectMake(0, 0, 350, 544);
+    CGFloat cw = 350;
 
-    [self.view addSubview:vcLabel(CGRectMake(16, 10, 200, 30), @"VCam Pro Bypass", VCB_TXT, 17, YES)];
-    UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(16, 50, 10, 10)];
-    dot.layer.cornerRadius = 5; dot.backgroundColor = vcStateColor();
-    [self.view addSubview:dot];
-    [self.view addSubview:vcLabel(CGRectMake(34, 44, 250, 22), vcStatusLine(), VCB_GRAY, 12, NO)];
+    UIView *card = [[UIView alloc] initWithFrame:self.view.bounds];
+    card.layer.cornerRadius = 20;
+    card.clipsToBounds = YES;
+    card.backgroundColor = VCB_PANEL;
+    [self.view addSubview:card];
 
-    vcSwitchRow(self.view, 72,  @"画面替换",   vcReplaceOn(),     self, @selector(onReplace:));
-    vcSwitchRow(self.view, 120, @"相机真画面", vcCameraPassOn(), self, @selector(onCamera:));
-    vcActionBtn(self.view, 170, @"重新注入",   self, @selector(onRetry));
-    vcActionBtn(self.view, 210, @"导出日志",   self, @selector(onExportLog));
-    vcActionBtn(self.view, 250, @"隐藏悬浮球", self, @selector(onHide));
-    vcActionBtn(self.view, 290, @"关闭面板",   self, @selector(onClose));
+    CAGradientLayer *edge = [CAGradientLayer layer];
+    edge.frame = CGRectMake(0, 0, cw, 2.5);
+    edge.colors = @[(id)VCB_CYAN.CGColor, (id)[UIColor colorWithRed:0.91 green:0.47 blue:0.98 alpha:1.0].CGColor];
+    [card.layer addSublayer:edge];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(18, 24, cw - 120, 20)];
+    title.text = @"VCam Pro Bypass";
+    title.font = [UIFont boldSystemFontOfSize:15];
+    title.textColor = [UIColor whiteColor];
+    [card addSubview:title];
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(18, 39, cw - 120, 9)];
+    sub.text = @"ENERGY DECK · VIRTUAL CAMERA · OFFLINE";
+    sub.font = [UIFont systemFontOfSize:7];
+    sub.textColor = VCB_GRAY;
+    [card addSubview:sub];
+
+    _colorDot = [[UIView alloc] initWithFrame:CGRectMake(cw - 36, 14, 26, 26)];
+    _colorDot.layer.cornerRadius = 13;
+    _colorDot.layer.borderWidth = 2;
+    _colorDot.layer.borderColor = [UIColor whiteColor].CGColor;
+    _colorDot.backgroundColor = vcBgraToUI(0xFFFF0000);
+    [card addSubview:_colorDot];
+
+    UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(0, 48, cw, 0.5)];
+    sep.backgroundColor = VCB_LINE;
+    [card addSubview:sep];
+
+    CGFloat mw = (cw - 40 - 30) / 4;
+    _chipVal[0] = [self mkChip:pg1 x:20 y:12 w:mw label:@"REPLACE" val:@"ON" color:VCB_GREEN];
+    _chipVal[1] = [self mkChip:pg1 x:20 + (mw + 10) y:12 w:mw label:@"CAMERA" val:@"ON" color:VCB_GREEN];
+    _chipVal[2] = [self mkChip:pg1 x:20 + (mw + 10) * 2 y:12 w:mw label:@"HOOKS" val:@"--" color:VCB_AMBER];
+    _chipVal[3] = [self mkChip:pg1 x:20 + (mw + 10) * 3 y:12 w:mw label:@"PATTERN" val:@"RED" color:VCB_CYAN];
+
+    // 双页: FUNC / STATUS
+    _tab1 = [self mkTab:@"FUNC" x:20 sel:YES tag:1];
+    _tab2 = [self mkTab:@"STATUS" x:84 sel:NO tag:2];
+    _tab3 = [self mkTab:@"FUNC" x:20 sel:NO tag:1];
+    _tab4 = [self mkTab:@"STATUS" x:84 sel:YES tag:2];
+    [card addSubview:_tab1];
+    [card addSubview:_tab2];
+    [card addSubview:_tab3];
+    [card addSubview:_tab4];
+
+    _pages = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 54, cw, 424)];
+    _pages.pagingEnabled = YES;
+    _pages.showsHorizontalScrollIndicator = NO;
+    _pages.bounces = NO;
+    _pages.delegate = self;
+    _pages.contentSize = CGSizeMake(cw * 2, 424);
+    [card addSubview:_pages];
+
+    UIView *pg1 = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cw, 424)];
+    UIView *pg2 = [[UIView alloc] initWithFrame:CGRectMake(cw, 0, cw, 424)];
+    [_pages addSubview:pg1];
+    [_pages addSubview:pg2];
+
+    CGFloat bw = (cw - 40 - 10) / 2;
+    CGFloat lx = 20, rx = 20 + bw + 10;
+    // ---- 页1 FUNC ----
+    UILabel *sT = [[UILabel alloc] initWithFrame:CGRectMake(lx, 68, bw, 10)];
+    sT.text = @"SOURCES";
+    sT.font = [UIFont boldSystemFontOfSize:9];
+    sT.textColor = VCB_GRAY;
+    [pg1 addSubview:sT];
+    UILabel *cT = [[UILabel alloc] initWithFrame:CGRectMake(rx, 68, bw, 10)];
+    cT.text = @"COLOR FX";
+    cT.font = [UIFont boldSystemFontOfSize:9];
+    cT.textColor = VCB_GRAY;
+    [pg1 addSubview:cT];
+
+    [self mkSwitchRow:pg1 x:lx y:80 w:bw title:@"画面替换" sw:&_swReplace];
+    _swReplace.on = vcReplaceOn();
+    [_swReplace addTarget:self action:@selector(onReplace:) forControlEvents:UIControlEventValueChanged];
+    [self mkSwitchRow:pg1 x:lx y:132 w:bw title:@"相机真画面" sw:&_swCamera];
+    _swCamera.on = vcCameraPassOn();
+    [_swCamera addTarget:self action:@selector(onCamera:) forControlEvents:UIControlEventValueChanged];
+
+    for (int i = 0; i < 6; i++) {
+        UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
+        cb.frame = CGRectMake(rx + (i % 3) * 58, 100 + (i / 3) * 58, 48, 48);
+        cb.layer.cornerRadius = 10;
+        cb.backgroundColor = vcBgraToUI(vcColorTable[i]);
+        cb.layer.borderWidth = 1.5;
+        cb.layer.borderColor = [UIColor whiteColor].CGColor;
+        cb.tag = i + 1;
+        [cb addTarget:self action:@selector(onColor:) forControlEvents:UIControlEventTouchUpInside];
+        [pg1 addSubview:cb];
+    }
+
+    [pg1 addSubview:[self mkBtn:@"RE-INJECT" x:lx y:216 w:bw h:44 font:10 color:[UIColor colorWithRed:0.35 green:0.55 blue:0.95 alpha:1] tag:1]];
+    [pg1 addSubview:[self mkBtn:@"EXPORT LOG" x:lx y:268 w:bw h:44 font:10 color:[UIColor colorWithRed:0.45 green:0.62 blue:0.55 alpha:1] tag:2]];
+
+    // ---- 页2 STATUS ----
+    CGFloat barX = cw - 20 - 44;
+    UILabel *enL = [[UILabel alloc] initWithFrame:CGRectMake(barX, 56, 44, 10)];
+    enL.text = @"ENERGY";
+    enL.font = [UIFont systemFontOfSize:7.5];
+    enL.textColor = VCB_GRAY;
+    enL.textAlignment = NSTextAlignmentCenter;
+    [pg2 addSubview:enL];
+    UIView *barOut = [[UIView alloc] initWithFrame:CGRectMake(barX, 78, 44, 224)];
+    barOut.layer.cornerRadius = 22;
+    barOut.layer.borderWidth = 3;
+    barOut.layer.borderColor = VCB_LINE.CGColor;
+    [pg2 addSubview:barOut];
+    UIView *barIn = [[UIView alloc] initWithFrame:CGRectMake(barX + 6, 84, 32, 212)];
+    barIn.backgroundColor = VCB_BG;
+    barIn.layer.cornerRadius = 16;
+    [pg2 addSubview:barIn];
+    _barFill = [[UIView alloc] initWithFrame:CGRectMake(barX + 6, 84 + 212, 32, 0)];
+    _barFill.backgroundColor = VCB_CYAN;
+    _barFill.layer.cornerRadius = 16;
+    _barFill.alpha = 0.9;
+    [pg2 addSubview:_barFill];
+
+    [self mkStatusRow:pg2 y:84  label:@"OBJC SWIZZLE" tag:1];
+    [self mkStatusRow:pg2 y:120 label:@"C FUNCTION HOOK" tag:2];
+    [self mkStatusRow:pg2 y:156 label:@"GATE2 (license)" tag:3];
+    [self mkStatusRow:pg2 y:192 label:@"SECKEY VERIFY" tag:4];
+    [self mkStatusRow:pg2 y:228 label:@"PHOTO ENCODER" tag:5];
+
+    // 卡片级关闭按钮 (参考工程同款)
+    [card addSubview:[self mkBtn:@"✕ CLOSE PANEL" x:20 y:480 w:cw - 40 h:42 font:13 color:[UIColor colorWithRed:0.9 green:0.33 blue:0.31 alpha:1] tag:9]];
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 530, cw, 10)];
+    hint.text = @"◁▷ swipe pages · tap ball to open";
+    hint.font = [UIFont systemFontOfSize:8];
+    hint.textColor = VCB_GRAY;
+    hint.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:hint];
 }
-- (void)viewWillAppear:(BOOL)a { [super viewWillAppear:a]; [self refreshStatus]; }
-- (void)refreshStatus { [[self.view viewWithTag:99] removeFromSuperview];
-    UILabel *l = vcLabel(CGRectMake(16, 44, 260, 22), vcStatusLine(), VCB_GRAY, 12, NO);
-    l.tag = 99; [self.view addSubview:l]; }
+
+- (void)viewWillAppear:(BOOL)a {
+    [super viewWillAppear:a];
+    [self refreshStatus];
+}
+- (void)refreshStatus {
+    int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
+    vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
+    _chipVal[0].text = vcReplaceOn() ? @"ON" : @"OFF";
+    _chipVal[0].textColor = vcReplaceOn() ? VCB_GREEN : VCB_RED;
+    _chipVal[1].text = vcCameraPassOn() ? @"ON" : @"OFF";
+    _chipVal[1].textColor = vcCameraPassOn() ? VCB_GREEN : VCB_RED;
+    int hooks = (sw ? 1 : 0) + (cf ? 1 : 0) + (g2 ? 1 : 0) + (sk ? 1 : 0) + (pe ? 1 : 0);
+    _chipVal[2].text = [NSString stringWithFormat:@"%d/5", hooks];
+    _chipVal[2].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
+    _swReplace.on = vcReplaceOn();
+    _swCamera.on = vcCameraPassOn();
+    BOOL st[5] = {sw, cf, g2, sk, pe};
+    UIColor *good = VCB_GREEN, *bad = VCB_GRAY;
+    for (int i = 0; i < 5; i++) {
+        _stVal[i].text = st[i] ? @"ON" : @"--";
+        _stVal[i].textColor = st[i] ? good : bad;
+    }
+    [UIView animateWithDuration:0.25 animations:^{
+        CGRect f = _barFill.frame;
+        f.size.height = 212.0 * hooks / 5.0;
+        f.origin.y = 84 + 212 - f.size.height;
+        _barFill.frame = f;
+    }];
+}
 - (void)onReplace:(UISwitch *)s { vcam_bypass_set_replace(s.on); [self refreshStatus]; }
 - (void)onCamera:(UISwitch *)s  { vcam_bypass_set_camera_pass(s.on); [self refreshStatus]; }
+- (void)onColor:(UIButton *)b {
+    int i = (int)b.tag - 1;
+    vcam_bypass_set_pattern_color(vcColorTable[i]);
+    _colorDot.backgroundColor = vcBgraToUI(vcColorTable[i]);
+    _chipVal[3].text = [NSString stringWithUTF8String:vcColorNames[i]];
+    [self refreshStatus];
+}
+- (void)btnTap:(UIButton *)b {
+    if (b.tag == 1) { [self onRetry]; }
+    else if (b.tag == 2) { [self onExportLog]; }
+    else if (b.tag == 9) { vcHideMenu(); }
+}
 - (void)onRetry   { vcam_bypass_retry(); [self refreshStatus]; }
-- (void)onClose   { vcHideMenu(); }
-- (void)onHide    { vcHideBall(); vcHideMenu(); }
 - (void)onExportLog {
     NSString *log = vcam_bypass_logs() ?: @"";
     NSString *path = @"/var/jb/var/mobile/Library/vcampro-bypass.log";
@@ -169,14 +393,27 @@ static UIButton *vcActionBtn(UIView *host, CGFloat y, NSString *title, id target
     [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:a animated:YES completion:nil];
 }
-@end
-
-static NSString *vcStatusLine(void) {
-    int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
-    vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
-    return [NSString stringWithFormat:@"swizzle:%@ hook:%@ gate2:%@ seckey:%@ photoenc:%@",
-        sw ? @"ON" : @"--", cf ? @"ON" : @"--", g2 ? @"ON" : @"--", sk ? @"ON" : @"--", pe ? @"ON" : @"--"];
+- (void)switchPage:(UIButton *)sender {
+    NSInteger pg = sender.tag;
+    [_pages setContentOffset:CGPointMake((pg - 1) * _pages.frame.size.width, 0) animated:YES];
+    [self updateTabs:pg];
 }
+- (void)updateTabs:(NSInteger)pg {
+    BOOL s1 = (pg == 1), s2 = (pg == 2);
+    _tab1.backgroundColor = s1 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+    _tab2.backgroundColor = s2 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+    _tab3.backgroundColor = s1 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+    _tab4.backgroundColor = s2 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+    [_tab1 setTitleColor:s1 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+    [_tab2 setTitleColor:s2 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+    [_tab3 setTitleColor:s1 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+    [_tab4 setTitleColor:s2 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+}
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)sv {
+    NSInteger pg = (NSInteger)(sv.contentOffset.x / MAX(sv.frame.size.width, 1)) + 1;
+    [self updateTabs:pg];
+}
+@end
 
 // ============================================================
 #pragma mark - 窗口管理 / 音量入口

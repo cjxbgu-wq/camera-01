@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v1.1.5 (2026-08-12)
+
+### 功能
+- feat: 控制面板重构 — 采用参考工程(朋友版 UI 源码)的深色能量卡片构图:
+  350x544 圆角卡片 + 顶部渐变边条 + 双页滑动 (FUNC/STATUS) + 页签 + 能量条。
+  功能键全部对应构建仓库 Tweak.xm 真实能力:
+  - FUNC 页: REPLACE/CAMERA/HOOKS/PATTERN 状态芯片; 画面替换、相机真画面
+    开关; 6 色图案预设 (RED/GREEN/BLUE/YELLOW/CYAN/WHITE, BGRA);
+    RE-INJECT、EXPORT LOG 按钮; ✕ CLOSE PANEL。
+  - STATUS 页: OBJC SWIZZLE / C FUNCTION HOOK / GATE2 / SECKEY VERIFY /
+    PHOTO ENCODER 5 项 hook 状态 + ENERGY 填充条。
+- fix: 菜单页签 tag 缺失导致切页失效; 芯片/状态行挂载到页面容器
+  (跟随滑动切页); 修正芯片与页签重叠、状态值与能量条重叠。
+
 ## v1.1.4 (2026-08-12)
 
 ### 修复
