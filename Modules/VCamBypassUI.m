@@ -7,6 +7,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <dlfcn.h>
 
 #define VCB_BG   [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0]
 #define VCB_PANEL [UIColor colorWithRed:0.11 green:0.14 blue:0.21 alpha:1.0]
@@ -208,6 +209,16 @@ void vcToggleMenu(void) {
     if (sMenuWin && !sMenuWin.hidden) { vcHideMenu(); } else { vcShowMenu(); }
 }
 
+// method_invoke 在 SDK 头中声明为无原型 varargs (Clang ARC 拒绝直接调用),
+// 用 dlsym 运行时解析 + 自定义函数指针, 兼容任意 SDK
+typedef id (*vcMethodInvokeFn)(id, Method, ...);
+static id vcInvokeMethod(id self, Method m) {
+    static vcMethodInvokeFn fn = NULL;
+    if (!fn) fn = (vcMethodInvokeFn)dlsym(RTLD_DEFAULT, "method_invoke");
+    if (fn) return fn(self, m, NULL);
+    return nil;
+}
+
 static void vcVolumeInstall(void) {
     @try {
         Class cls = NSClassFromString(@"SBVolumeControl");
@@ -236,7 +247,7 @@ static void vcVolumeInstall(void) {
         // 不假设 v@: 签名, 无调用约定错位风险
         Method upKeep = up, dnKeep = dn;
         method_setImplementation(up, imp_implementationWithBlock(^(id self) {
-            @try { method_invoke(self, upKeep); }
+            @try { vcInvokeMethod(self, upKeep); }
             @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
             NSTimeInterval now = CACurrentMediaTime();
             if (sDnT > 0 && (now - sDnT) < 1.5) { sUpT = sDnT = 0;
@@ -244,7 +255,7 @@ static void vcVolumeInstall(void) {
             else sUpT = now;
         }));
         method_setImplementation(dn, imp_implementationWithBlock(^(id self) {
-            @try { method_invoke(self, dnKeep); }
+            @try { vcInvokeMethod(self, dnKeep); }
             @catch (NSException *e) { NSLog(@"[vcbUI] dn orig fail: %@", e); }
             NSTimeInterval now = CACurrentMediaTime();
             if (sUpT > 0 && (now - sUpT) < 1.5) { sUpT = sDnT = 0;
