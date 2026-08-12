@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index 2872389..8a86033 100644
+index 2872389..ef36435 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -5,11 +5,11 @@ THEOS_PACKAGE_SCHEME = rootless
@@ -15,19 +15,1588 @@ index 2872389..8a86033 100644
 -aaa-vcam125-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
 +vcampro-bypass_FILES      = Tweak.xm Modules/VCamBypassUI.m
 +vcampro-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
-+vcampro-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox UIKit QuartzCore
++vcampro-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox UIKit QuartzCore AVFoundation CoreImage CoreMedia
 +vcampro-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
  
  include $(THEOS_MAKE_PATH)/tweak.mk
+diff --git a/Modules/VCamBypassUI.h b/Modules/VCamBypassUI.h
+index 3fdd407..8ee95af 100644
+--- a/Modules/VCamBypassUI.h
++++ b/Modules/VCamBypassUI.h
+@@ -21,6 +21,21 @@ NSString *vcam_bypass_logs(void);               // 内存日志导出
+ int  vcam_bypass_get_replace(void);             // 读当前开关
+ int  vcam_bypass_get_camera_pass(void);
+ 
++// ---- v33 视频/图片功能接口 (Tweak.xm UI-PATCH.diff 实现) ----
++BOOL vcam_bypass_set_pause(BOOL on);            // 视频播放/暂停 (暂停固定当前帧)
++int  vcam_bypass_get_pause(void);
++BOOL vcam_bypass_toggle_rotation(void);         // 视频旋转 90/180/270
++int  vcam_bypass_get_rotation(void);
++BOOL vcam_bypass_set_color_inject(int on, double r, double g, double b, double a); // 颜色注入 RGB+alpha
++int  vcam_bypass_get_color_inject(double *r, double *g, double *b, double *a);
++int  vcam_bypass_source_mode(void);             // 当前激活源: 0=图案 1=视频 2=图片
++NSString *vcam_bypass_source_info(void);        // "videoSize|imageSize" (0=无文件)
++
++// ---- v34 VCActionSystem 分段动作接口 (Tweak.xm UI-PATCH.diff 实现) ----
++BOOL vcam_bypass_set_action(const char *actionID); // 选择动作 (空=清除); 写 actions.json + controls
++void vcam_bypass_action_stop(void);             // 停止动作 (引擎复位, 不重置播放位置)
++const char *vcam_bypass_active_action(void);    // 引擎当前生效动作 id (空=普通模式)
++
+ // ---- UI 入口 (ctor 由补丁调用) ----
+ void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
+ 
+diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
+index 4fe9530..a6d5214 100644
+--- a/Modules/VCamBypassUI.m
++++ b/Modules/VCamBypassUI.m
+@@ -1,24 +1,29 @@
+ //
+-//  VCamBypassUI.m — VCam Pro Bypass UI (v32)
++//  VCamBypassUI.m — VCam Pro Bypass UI (v33 透明玻璃重构)
+ //  仅 SpringBoard 进程加载; 其余进程 no-op
++//  功能键(7项): 选择视频 / 颜色注入 / 选择图片 / 视频旋转 / 播放暂停 / 画面替换 / 6色块
++//  隐藏(代码保留): 相机真画面开关 / 重新注入 / 导出日志
+ //
+ #import "VCamBypassUI.h"
+ #import <UIKit/UIKit.h>
+ #import <QuartzCore/QuartzCore.h>
+ #import <objc/runtime.h>
++#import <AVFoundation/AVFoundation.h>
+ 
+-#define VCB_BG   [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0]
+-#define VCB_PANEL [UIColor colorWithRed:0.11 green:0.14 blue:0.21 alpha:1.0]
+-#define VCB_LINE [UIColor colorWithRed:0.23 green:0.28 blue:0.40 alpha:1.0]
+-#define VCB_GREEN [UIColor colorWithRed:0.40 green:0.73 blue:0.42 alpha:1.0]
+-#define VCB_AMBER [UIColor colorWithRed:1.00 green:0.72 blue:0.30 alpha:1.0]
++#define VCB_DIR     @"/var/jb/var/mobile/Library/vcamplus"
++#define VCB_VIDEO   VCB_DIR @"/video.mp4"
++#define VCB_IMAGE   VCB_DIR @"/image.jpg"
++#define VCB_PANEL_ALPHA 0.72f
++#define VCB_GREEN [UIColor colorWithRed:0.29 green:0.87 blue:0.50 alpha:1.0]
++#define VCB_AMBER [UIColor colorWithRed:0.98 green:0.75 blue:0.14 alpha:1.0]
+ #define VCB_RED   [UIColor colorWithRed:0.94 green:0.33 blue:0.31 alpha:1.0]
+ #define VCB_TXT   [UIColor whiteColor]
+-#define VCB_GRAY  [UIColor colorWithRed:0.60 green:0.65 blue:0.78 alpha:1.0]
+-#define VCB_CYAN  [UIColor colorWithRed:0.31 green:0.76 blue:0.97 alpha:1.0]
++#define VCB_GRAY  [UIColor colorWithRed:0.55 green:0.48 blue:0.82 alpha:1.0]
++#define VCB_CYAN  [UIColor colorWithRed:0.13 green:0.83 blue:0.93 alpha:1.0]
++#define VCB_LINE  [UIColor colorWithRed:0.20 green:0.14 blue:0.37 alpha:1.0]
+ 
+ static BOOL vcReplaceOn(void);
+-static BOOL vcCameraPassOn(void);
++static UIViewController *vcTopVC(void);
+ void vcToggleMenu(void);
+ void vcHideMenu(void);
+ void vcHideBall(void);
+@@ -33,6 +38,15 @@ static NSTimeInterval sUpT  = 0;
+ static NSTimeInterval sDnT  = 0;
+ static BOOL sInstalled      = NO;
+ 
++// [PATCH-v34] VCActionSystem 动作页状态 (actions.json 同 schema: {id,name,start,end,loop,speed})
++static NSString *const kActJson = @"/var/jb/var/mobile/Library/vcamplus/actions.json";
++static NSString *const kActVideoPath = @"/var/jb/var/mobile/Library/vcamplus/video.mp4";
++static NSMutableArray *_actData = nil;          // actions[] 副本 (NSDictionary)
++static NSString *_sActID = nil;                 // 当前选中动作 id (UI 侧)
++static NSString *_sActVideo = nil;              // actions.json 记录的 videoName
++static unsigned long long _sActVideoSize = 0;   // 记录的 video.mp4 大小 (换视频检测)
++static double _actDur = 0;                      // 当前视频时长 (秒, 异步获取)
++
+ static UIColor *vcStateColor(void) {
+     int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
+     vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
+@@ -85,6 +99,104 @@ static UIColor *vcStateColor(void) {
+ - (void)onTap { vcToggleMenu(); }
+ @end
+ 
++// ============================================================
++#pragma mark - PHPicker / 相册选择 (参考工程 UIHlp 移植)
++// ============================================================
++@protocol PHPickerViewControllerDelegate <NSObject>
++- (void)picker:(UIViewController *)picker didFinishPicking:(NSArray *)results;
++@end
++@interface PHPickerFilter : NSObject
+++ (PHPickerFilter *)videosFilter;
+++ (PHPickerFilter *)imagesFilter;
++@end
++@interface PHPickerConfiguration : NSObject
++- (instancetype)init;
++@property (nonatomic, copy) PHPickerFilter *filter;
++@property (nonatomic) NSInteger selectionLimit;
++@property (nonatomic) NSInteger preferredAssetRepresentationMode;
++@end
++@interface PHPickerViewController : UIViewController
++- (instancetype)initWithConfiguration:(PHPickerConfiguration *)configuration;
++@property (nonatomic, weak) id<PHPickerViewControllerDelegate> delegate;
++@end
++@interface PHPickerResult : NSObject
++@property (nonatomic, strong) NSItemProvider *itemProvider;
++@end
++
++@interface UIHlp : NSObject <UIImagePickerControllerDelegate, UINavigationControllerDelegate, PHPickerViewControllerDelegate>
+++ (instancetype)shared;
++@end
++@implementation UIHlp
+++ (instancetype)shared {
++    static UIHlp *i; static dispatch_once_t o;
++    dispatch_once(&o, ^{ i = [[UIHlp alloc] init]; }); return i;
++}
++
++// PHPicker 视频回调 — staged copy + AVAssetExportSession Passthrough 重封装 (.mov)
++// 不转码: 源 HEVC 仍 HEVC, H.264 仍 H.264 (参考工程 UIHlp.picker:)
++- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
++    [picker dismissViewControllerAnimated:YES completion:nil];
++    if (results.count == 0) return;
++    PHPickerResult *r = results.firstObject;
++    NSItemProvider *prov = r.itemProvider;
++    if (!prov) return;
++    if ([prov hasItemConformingToTypeIdentifier:@"public.movie"]) {
++        [prov loadFileRepresentationForTypeIdentifier:@"public.movie"
++            completionHandler:^(NSURL *url, NSError *error) {
++                if (!url || error) return;
++                NSString *stagedPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"vcam_picked_input.mov"];
++                NSFileManager *fm = [NSFileManager defaultManager];
++                [fm removeItemAtPath:stagedPath error:nil];
++                NSError *cpErr = nil;
++                [fm copyItemAtURL:url toURL:[NSURL fileURLWithPath:stagedPath] error:&cpErr];
++                if (cpErr) return;
++                AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:stagedPath] options:nil];
++                AVAssetExportSession *exp = [[AVAssetExportSession alloc] initWithAsset:asset
++                                                presetName:AVAssetExportPresetPassthrough];
++                NSString *outPath = [NSTemporaryDirectory() stringByAppendingPathComponent:@"vcam_picked_output.mov"];
++                [fm removeItemAtPath:outPath error:nil];
++                exp.outputURL = [NSURL fileURLWithPath:outPath];
++                exp.outputFileType = AVFileTypeQuickTimeMovie;
++                [exp exportAsynchronouslyWithCompletionHandler:^{
++                    dispatch_async(dispatch_get_main_queue(), ^{
++                        [fm createDirectoryAtPath:VCB_DIR withIntermediateDirectories:YES attributes:nil error:nil];
++                        [fm removeItemAtPath:VCB_VIDEO error:nil];
++                        [fm removeItemAtPath:VCB_IMAGE error:nil];
++                        if (exp.status == AVAssetExportSessionStatusCompleted) {
++                            [fm copyItemAtPath:outPath toPath:VCB_VIDEO error:nil];
++                        } else {
++                            [fm copyItemAtPath:stagedPath toPath:VCB_VIDEO error:nil];
++                        }
++                        [fm removeItemAtPath:stagedPath error:nil];
++                        [fm removeItemAtPath:outPath error:nil];
++                        vcam_bypass_set_pause(NO);      // 新视频恢复播放
++                        vcam_bypass_set_replace(YES);   // 自动开启替换
++                        [VCMenuVC refreshIfVisible];
++                    });
++                }];
++            }];
++    }
++}
++// UIImagePicker 回调 — 图片 (参考工程 imagePickerController:)
++- (void)imagePickerController:(UIImagePickerController *)p didFinishPickingMediaWithInfo:(NSDictionary *)info {
++    [p dismissViewControllerAnimated:YES completion:nil];
++    UIImage *image = info[UIImagePickerControllerOriginalImage];
++    if (!image) return;
++    NSData *jpegData = UIImageJPEGRepresentation(image, 0.9);
++    if (!jpegData) return;
++    NSFileManager *fm = [NSFileManager defaultManager];
++    [fm createDirectoryAtPath:VCB_DIR withIntermediateDirectories:YES attributes:nil error:nil];
++    [fm removeItemAtPath:VCB_IMAGE error:nil];
++    [fm removeItemAtPath:VCB_VIDEO error:nil];
++    [jpegData writeToFile:VCB_IMAGE atomically:YES];
++    vcam_bypass_set_replace(YES);
++    [VCMenuVC refreshIfVisible];
++}
++- (void)imagePickerControllerDidCancel:(UIImagePickerController *)p {
++    [p dismissViewControllerAnimated:YES completion:nil];
++}
++@end
++
+ // ============================================================
+ #pragma mark - 菜单面板
+ // ============================================================
+@@ -100,36 +212,73 @@ static UIColor *vcBgraToUI(uint32_t c) {
+                             blue:(c & 0xFF) / 255.0
+                            alpha:1.0];
+ }
++static NSString *vcHumanSize(unsigned long long b) {
++    if (b >= 1024ULL * 1024 * 1024) return [NSString stringWithFormat:@"%.1f GB", b / 1073741824.0];
++    if (b >= 1024ULL * 1024) return [NSString stringWithFormat:@"%.1f MB", b / 1048576.0];
++    if (b >= 1024ULL) return [NSString stringWithFormat:@"%.0f KB", b / 1024.0];
++    return @"0 B";
++}
+ 
+ @interface VCMenuVC : UIViewController <UIScrollViewDelegate> {
+     UIScrollView *_pages;
+-    UIButton *_tab1, *_tab2, *_tab3, *_tab4;
++    UIButton *_tab1, *_tab2, *_tab3, *_tab4, *_tabAct;
+     UIView *_colorDot;
+     UIView *_barFill;
+-    UISwitch *_swReplace, *_swCamera;
++    UIButton *_btnPause;
++    UIButton *_btnReplace;
+     UILabel *_chipVal[4];
+     UILabel *_stVal[5];
++    UILabel *_srcVideoVal;
++    UILabel *_srcImageVal;
++    UILabel *_srcActiveVal;
++    // [PATCH-v34] 动作页
++    UILabel *_actModeVal;
++    UILabel *_actStateVal;
++    UILabel *_actInfoVal;
++    UIView *_actListHost;
+ }
+ @end
+ @implementation VCMenuVC
+ - (instancetype)init {
+     self = [super init];
+     if (self) {
+-        // 对齐参考工程: 用 topVC present 弹窗, 不建独立 UIWindow
+-        // (iOS 13+ 无 scene 关联的 UIWindow 不渲染 → 悬浮窗不显示)
+         self.modalPresentationStyle = UIModalPresentationFormSheet;
+         self.preferredContentSize = CGSizeMake(350, 544);
+     }
+     return self;
+ }
+ 
+-// ---- 组件工厂 (参考工程构图: 深色能量卡片) ----
++// ---- 透明玻璃卡片 ----
++- (UIView *)mkGlassCard:(CGRect)f {
++    UIView *card = [[UIView alloc] initWithFrame:f];
++    card.backgroundColor = [UIColor clearColor];
++    card.layer.cornerRadius = 20;
++    card.clipsToBounds = YES;
++    // 半透明渐变底 (透明玻璃, alpha 0.72)
++    CAGradientLayer *bg = [CAGradientLayer layer];
++    bg.frame = card.bounds;
++    bg.colors = @[(id)[UIColor colorWithRed:0.05 green:0.04 blue:0.12 alpha:VCB_PANEL_ALPHA].CGColor,
++                  (id)[UIColor colorWithRed:0.075 green:0.06 blue:0.18 alpha:VCB_PANEL_ALPHA].CGColor];
++    [card.layer insertSublayer:bg atIndex:0];
++    // 顶部渐变条
++    CAGradientLayer *edge = [CAGradientLayer layer];
++    edge.frame = CGRectMake(0, 0, f.size.width, 2.5);
++    edge.colors = @[(id)VCB_CYAN.CGColor,
++                    (id)[UIColor colorWithRed:0.91 green:0.47 blue:0.98 alpha:1.0].CGColor];
++    [card.layer addSublayer:edge];
++    // 高亮边框
++    card.layer.borderWidth = 1;
++    card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.18].CGColor;
++    return card;
++}
++
++// ---- 状态胶囊 (chips) ----
+ - (UILabel *)mkChip:(UIView *)host x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w label:(NSString *)l val:(NSString *)v color:(UIColor *)c {
+     UIView *box = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, 26)];
+-    box.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
+-    box.layer.cornerRadius = 8;
++    box.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
++    box.layer.cornerRadius = 13;
+     box.layer.borderWidth = 1;
+-    box.layer.borderColor = VCB_LINE.CGColor;
++    box.layer.borderColor = [c colorWithAlphaComponent:0.5].CGColor;
+     UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(7, 2, w - 14, 9)];
+     lab.text = l;
+     lab.font = [UIFont systemFontOfSize:7];
+@@ -144,45 +293,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
+     [host addSubview:box];
+     return valL;
+ }
++
++// ---- 页签 ----
+ - (UIButton *)mkTab:(NSString *)t x:(CGFloat)x sel:(BOOL)s tag:(NSInteger)tag {
+     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+     b.frame = CGRectMake(x, 42, 56, 22);
+     b.tag = tag;
+     b.layer.cornerRadius = 11;
+-    b.backgroundColor = s ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
++    b.backgroundColor = s ? [UIColor colorWithRed:0.91 green:0.96 blue:1.0 alpha:1.0]
++                         : [UIColor colorWithWhite:1 alpha:0.08];
+     [b setTitle:t forState:UIControlStateNormal];
+     b.titleLabel.font = [UIFont boldSystemFontOfSize:10];
+-    [b setTitleColor:s ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
++    [b setTitleColor:s ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1.0] : VCB_GRAY
++                     forState:UIControlStateNormal];
+     [b addTarget:self action:@selector(switchPage:) forControlEvents:UIControlEventTouchUpInside];
+     return b;
+ }
+-- (UIButton *)mkBtn:(NSString *)t x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w h:(CGFloat)h font:(CGFloat)fs color:(UIColor *)c tag:(NSInteger)tag {
++
++// ---- 渐变功能键 (带按压缩放反馈, 参考工程 btnDown/btnUp) ----
++- (UIButton *)mkBtn:(NSString *)t tag:(NSInteger)tag x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w h:(CGFloat)h
++             font:(CGFloat)fs from:(UIColor *)f to:(UIColor *)t2 {
+     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+     b.frame = CGRectMake(x, y, w, h);
++    b.layer.cornerRadius = 10;
++    b.clipsToBounds = YES;
+     b.tag = tag;
+-    b.layer.cornerRadius = 8;
+-    b.backgroundColor = c;
++    CAGradientLayer *g = [CAGradientLayer layer];
++    g.frame = b.bounds;
++    g.cornerRadius = 10;
++    g.colors = @[(id)f.CGColor, (id)t2.CGColor];
++    g.startPoint = CGPointMake(0, 0);
++    g.endPoint = CGPointMake(0, 1);
++    [b.layer insertSublayer:g atIndex:0];
++    b.layer.borderWidth = 0.8;
++    b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
+     [b setTitle:t forState:UIControlStateNormal];
+     [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+     b.titleLabel.font = [UIFont boldSystemFontOfSize:fs];
++    [b addTarget:self action:@selector(btnDown:) forControlEvents:UIControlEventTouchDown];
++    [b addTarget:self action:@selector(btnUp:) forControlEvents:UIControlEventTouchUpInside];
++    [b addTarget:self action:@selector(btnUp:) forControlEvents:UIControlEventTouchUpOutside];
++    [b addTarget:self action:@selector(btnUp:) forControlEvents:UIControlEventTouchCancel];
++    [b addTarget:self action:@selector(btnUp:) forControlEvents:UIControlEventTouchDragExit];
+     [b addTarget:self action:@selector(btnTap:) forControlEvents:UIControlEventTouchUpInside];
+     return b;
+ }
+-- (UIView *)mkSwitchRow:(UIView *)host x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w title:(NSString *)t sw:(UISwitch **)outSw {
+-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, 44)];
+-    row.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+-    row.layer.cornerRadius = 8;
+-    [host addSubview:row];
+-    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(10, 12, w - 70, 20)];
+-    l.text = t;
+-    l.font = [UIFont boldSystemFontOfSize:11];
+-    l.textColor = VCB_TXT;
+-    [row addSubview:l];
+-    UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(w - 62, 6, 52, 32)];
+-    [row addSubview:sw];
+-    if (outSw) *outSw = sw;
+-    return row;
++- (void)btnDown:(UIButton *)b {
++    [UIView animateWithDuration:0.07 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
++        b.transform = CGAffineTransformMakeScale(0.9, 0.9);
++        b.alpha = 0.7;
++    } completion:nil];
+ }
++- (void)btnUp:(UIButton *)b {
++    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
++        b.transform = CGAffineTransformIdentity;
++        b.alpha = 1.0;
++    } completion:nil];
++}
++
++// ---- 状态行 (STATUS 页) ----
+ - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
+     UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
+     lab.text = l;
+@@ -197,232 +366,643 @@ static UIColor *vcBgraToUI(uint32_t c) {
+     _stVal[tag - 1] = val;
+ }
+ 
++// ---- 信号源文件行 (STATUS 页) ----
++- (void)mkSrcRow:(UIView *)host y:(CGFloat)y label:(NSString *)l sizeVal:(UILabel **)outVal accent:(UIColor *)c {
++    UIView *box = [[UIView alloc] initWithFrame:CGRectMake(20, y, 250, 40)];
++    box.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
++    box.layer.cornerRadius = 8;
++    box.layer.borderWidth = 1;
++    box.layer.borderColor = [c colorWithAlphaComponent:0.4].CGColor;
++    [host addSubview:box];
++    UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(10, 11, 140, 18)];
++    lab.text = l;
++    lab.font = [UIFont boldSystemFontOfSize:10];
++    lab.textColor = VCB_TXT;
++    [box addSubview:lab];
++    UILabel *val = [[UILabel alloc] initWithFrame:CGRectMake(150, 11, 90, 18)];
++    val.font = [UIFont boldSystemFontOfSize:10];
++    val.textAlignment = NSTextAlignmentRight;
++    val.textColor = c;
++    [box addSubview:val];
++    if (outVal) *outVal = val;
++}
++
+ - (void)viewDidLoad {
+     [super viewDidLoad];
+     self.view.backgroundColor = [UIColor clearColor];
+     self.view.bounds = CGRectMake(0, 0, 350, 544);
+     CGFloat cw = 350;
+ 
+-    UIView *card = [[UIView alloc] initWithFrame:self.view.bounds];
+-    card.layer.cornerRadius = 20;
+-    card.clipsToBounds = YES;
+-    card.backgroundColor = VCB_PANEL;
++    UIView *card = [self mkGlassCard:self.view.bounds];
+     [self.view addSubview:card];
+ 
+-    CAGradientLayer *edge = [CAGradientLayer layer];
+-    edge.frame = CGRectMake(0, 0, cw, 2.5);
+-    edge.colors = @[(id)VCB_CYAN.CGColor, (id)[UIColor colorWithRed:0.91 green:0.47 blue:0.98 alpha:1.0].CGColor];
+-    [card.layer addSublayer:edge];
+-
+-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(18, 24, cw - 120, 20)];
+-    title.text = @"VCam Pro Bypass";
++    // 标题 (新颖: 发光描边)
++    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(18, 22, cw - 120, 20)];
++    title.text = @"VCam Pro 越狱绕过";
+     title.font = [UIFont boldSystemFontOfSize:15];
+     title.textColor = [UIColor whiteColor];
++    title.shadowColor = VCB_CYAN;
++    title.shadowOffset = CGSizeZero;
+     [card addSubview:title];
+-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(18, 39, cw - 120, 9)];
+-    sub.text = @"ENERGY DECK · VIRTUAL CAMERA · OFFLINE";
++    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(18, 38, cw - 120, 9)];
++    sub.text = @"能量卡片 · 虚拟相机 · 透明玻璃";
+     sub.font = [UIFont systemFontOfSize:7];
+     sub.textColor = VCB_GRAY;
+     [card addSubview:sub];
+ 
+-    _colorDot = [[UIView alloc] initWithFrame:CGRectMake(cw - 36, 14, 26, 26)];
++    _colorDot = [[UIView alloc] initWithFrame:CGRectMake(cw - 36, 12, 26, 26)];
+     _colorDot.layer.cornerRadius = 13;
+     _colorDot.layer.borderWidth = 2;
+     _colorDot.layer.borderColor = [UIColor whiteColor].CGColor;
+-    _colorDot.backgroundColor = vcBgraToUI(0xFFFF0000);
++    _colorDot.backgroundColor = vcBgraToUI(vcColorTable[0]);
+     [card addSubview:_colorDot];
+ 
+-    UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(0, 48, cw, 0.5)];
+-    sep.backgroundColor = VCB_LINE;
+-    [card addSubview:sep];
++    // 状态胶囊 4 个: 替换 / 模式 / 来源 / 挂钩
++    CGFloat mw = (cw - 40 - 30) / 4;
++    _chipVal[0] = [self mkChip:card x:20 y:54 w:mw label:@"替换" val:@"开" color:VCB_GREEN];
++    _chipVal[1] = [self mkChip:card x:20 + (mw + 10) y:54 w:mw label:@"模式" val:@"图案" color:VCB_CYAN];
++    _chipVal[2] = [self mkChip:card x:20 + (mw + 10) * 2 y:54 w:mw label:@"来源" val:@"--" color:VCB_AMBER];
++    _chipVal[3] = [self mkChip:card x:20 + (mw + 10) * 3 y:54 w:mw label:@"挂钩" val:@"--" color:VCB_GREEN];
+ 
+-    // 双页: FUNC / STATUS
+-    _tab1 = [self mkTab:@"FUNC" x:20 sel:YES tag:1];
+-    _tab2 = [self mkTab:@"STATUS" x:84 sel:NO tag:2];
+-    _tab3 = [self mkTab:@"FUNC" x:20 sel:NO tag:1];
+-    _tab4 = [self mkTab:@"STATUS" x:84 sel:YES tag:2];
++    // 页签 + 页点 (v34: 三页 功能/状态/动作)
++    _tab1 = [self mkTab:@"功能" x:20 sel:YES tag:1];
++    _tab2 = [self mkTab:@"状态" x:84 sel:NO tag:2];
++    _tab3 = [self mkTab:@"功能" x:20 sel:NO tag:1];
++    _tab4 = [self mkTab:@"状态" x:84 sel:YES tag:2];
++    _tabAct = [self mkTab:@"动作" x:148 sel:NO tag:3];
+     [card addSubview:_tab1];
+     [card addSubview:_tab2];
+     [card addSubview:_tab3];
+     [card addSubview:_tab4];
++    [card addSubview:_tabAct];
++    // 页点
++    UIView *d1 = [[UIView alloc] initWithFrame:CGRectMake(cw - 40, 53, 8, 8)];
++    d1.layer.cornerRadius = 4; d1.backgroundColor = VCB_CYAN; [card addSubview:d1];
++    UIView *d2 = [[UIView alloc] initWithFrame:CGRectMake(cw - 25, 53, 8, 8)];
++    d2.layer.cornerRadius = 4; d2.backgroundColor = VCB_LINE; [card addSubview:d2];
++    UIView *d3 = [[UIView alloc] initWithFrame:CGRectMake(cw - 10, 53, 8, 8)];
++    d3.layer.cornerRadius = 4; d3.backgroundColor = VCB_LINE; [card addSubview:d3];
+ 
+-    _pages = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 54, cw, 424)];
++    _pages = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 84, cw, 394)];
+     _pages.pagingEnabled = YES;
+     _pages.showsHorizontalScrollIndicator = NO;
+     _pages.bounces = NO;
+     _pages.delegate = self;
+-    _pages.contentSize = CGSizeMake(cw * 2, 424);
++    _pages.contentSize = CGSizeMake(cw * 3, 394);
+     [card addSubview:_pages];
+ 
+-    UIView *pg1 = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cw, 424)];
+-    UIView *pg2 = [[UIView alloc] initWithFrame:CGRectMake(cw, 0, cw, 424)];
++    UIView *pg1 = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cw, 394)];
++    UIView *pg2 = [[UIView alloc] initWithFrame:CGRectMake(cw, 0, cw, 394)];
+     [_pages addSubview:pg1];
+     [_pages addSubview:pg2];
+ 
+-    CGFloat mw = (cw - 40 - 30) / 4;
+-    _chipVal[0] = [self mkChip:pg1 x:20 y:12 w:mw label:@"REPLACE" val:@"ON" color:VCB_GREEN];
+-    _chipVal[1] = [self mkChip:pg1 x:20 + (mw + 10) y:12 w:mw label:@"CAMERA" val:@"ON" color:VCB_GREEN];
+-    _chipVal[2] = [self mkChip:pg1 x:20 + (mw + 10) * 2 y:12 w:mw label:@"HOOKS" val:@"--" color:VCB_AMBER];
+-    _chipVal[3] = [self mkChip:pg1 x:20 + (mw + 10) * 3 y:12 w:mw label:@"PATTERN" val:@"RED" color:VCB_CYAN];
+-
+-    CGFloat bw = (cw - 40 - 10) / 2;
+-    CGFloat lx = 20, rx = 20 + bw + 10;
+-    // ---- 页1 FUNC ----
+-    UILabel *sT = [[UILabel alloc] initWithFrame:CGRectMake(lx, 68, bw, 10)];
+-    sT.text = @"SOURCES";
+-    sT.font = [UIFont boldSystemFontOfSize:9];
+-    sT.textColor = VCB_GRAY;
+-    [pg1 addSubview:sT];
+-    UILabel *cT = [[UILabel alloc] initWithFrame:CGRectMake(rx, 68, bw, 10)];
+-    cT.text = @"COLOR FX";
+-    cT.font = [UIFont boldSystemFontOfSize:9];
+-    cT.textColor = VCB_GRAY;
+-    [pg1 addSubview:cT];
+-
+-    UISwitch *swR = nil, *swC = nil;
+-    [self mkSwitchRow:pg1 x:lx y:80 w:bw title:@"画面替换" sw:&swR];
+-    _swReplace = swR;
+-    _swReplace.on = vcReplaceOn();
+-    [_swReplace addTarget:self action:@selector(onReplace:) forControlEvents:UIControlEventValueChanged];
+-    [self mkSwitchRow:pg1 x:lx y:132 w:bw title:@"相机真画面" sw:&swC];
+-    _swCamera = swC;
+-    _swCamera.on = vcCameraPassOn();
+-    [_swCamera addTarget:self action:@selector(onCamera:) forControlEvents:UIControlEventValueChanged];
++    // ================= ACTION 页 (v34: VCActionSystem 分段动作) =================
++    UIView *pg3 = [[UIView alloc] initWithFrame:CGRectMake(cw * 2, 0, cw, 394)];
++    CGFloat aw = (cw - 40 - 10) / 2;
++    _actModeVal = [self mkChip:pg3 x:20 y:8 w:aw label:@"模式" val:@"普通" color:VCB_GRAY];
++    _actStateVal = [self mkChip:pg3 x:20 + aw + 10 y:8 w:aw label:@"状态" val:@"停止" color:VCB_GRAY];
++    _actInfoVal = [[UILabel alloc] initWithFrame:CGRectMake(20, 40, cw - 40, 13)];
++    _actInfoVal.font = [UIFont boldSystemFontOfSize:9];
++    _actInfoVal.textColor = VCB_TXT;
++    [pg3 addSubview:_actInfoVal];
++    _actListHost = [[UIView alloc] initWithFrame:CGRectMake(0, 58, cw, 260)];
++    [pg3 addSubview:_actListHost];
++    UIButton *actAdd = [self mkBtn:@"＋ 添加动作" tag:10 x:20 y:332 w:aw h:44 font:11
++        from:[UIColor colorWithRed:0.29 green:0.87 blue:0.50 alpha:1]
++        to:[UIColor colorWithRed:0.09 green:0.64 blue:0.29 alpha:1]];
++    UIButton *actStop = [self mkBtn:@"■ 停止动作" tag:11 x:20 + aw + 10 y:332 w:aw h:44 font:11
++        from:[UIColor colorWithRed:0.98 green:0.44 blue:0.52 alpha:1]
++        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
++    [pg3 addSubview:actAdd]; [pg3 addSubview:actStop];
++    [_pages addSubview:pg3];
++
++    // ================= FUNC 页: 2x3 网格功能键 (等宽等距) =================
++    CGFloat bw = (cw - 40 - 12) / 2;
++    CGFloat bh = 52;
++    CGFloat gap = 12;
++    CGFloat lx = 20, rx = 20 + bw + gap;
++    CGFloat y0 = 8;
++
++    UIButton *b1 = [self mkBtn:@"选择视频" tag:1 x:lx y:y0 w:bw h:bh font:11
++        from:[UIColor colorWithRed:0.20 green:0.83 blue:0.60 alpha:1]
++        to:[UIColor colorWithRed:0.02 green:0.59 blue:0.41 alpha:1]];
++    UIButton *b2 = [self mkBtn:@"颜色注入" tag:2 x:rx y:y0 w:bw h:bh font:11
++        from:[UIColor colorWithRed:0.98 green:0.44 blue:0.52 alpha:1]
++        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
++    UIButton *b3 = [self mkBtn:@"选择图片" tag:3 x:lx y:y0 + bh + gap w:bw h:bh font:11
++        from:[UIColor colorWithRed:0.38 green:0.65 blue:0.98 alpha:1]
++        to:[UIColor colorWithRed:0.15 green:0.39 blue:0.92 alpha:1]];
++    UIButton *b4 = [self mkBtn:@"视频旋转" tag:4 x:rx y:y0 + bh + gap w:bw h:bh font:11
++        from:[UIColor colorWithRed:0.66 green:0.33 blue:0.97 alpha:1]
++        to:[UIColor colorWithRed:0.49 green:0.13 blue:0.81 alpha:1]];
++    _btnPause = [self mkBtn:@"播放 / 暂停" tag:5 x:lx y:y0 + (bh + gap) * 2 w:bw h:bh font:10
++        from:[UIColor colorWithRed:0.13 green:0.83 blue:0.93 alpha:1]
++        to:[UIColor colorWithRed:0.03 green:0.57 blue:0.70 alpha:1]];
++    _btnReplace = [self mkBtn:@"画面替换" tag:6 x:rx y:y0 + (bh + gap) * 2 w:bw h:bh font:10
++        from:[UIColor colorWithRed:0.29 green:0.87 blue:0.50 alpha:1]
++        to:[UIColor colorWithRed:0.09 green:0.64 blue:0.29 alpha:1]];
++    [pg1 addSubview:b1]; [pg1 addSubview:b2];
++    [pg1 addSubview:b3]; [pg1 addSubview:b4];
++    [pg1 addSubview:_btnPause]; [pg1 addSubview:_btnReplace];
+ 
++    // 6 色块 3x2 (图案颜色)
+     for (int i = 0; i < 6; i++) {
+         UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
+-        cb.frame = CGRectMake(rx + (i % 3) * 58, 100 + (i / 3) * 58, 48, 48);
+-        cb.layer.cornerRadius = 10;
++        cb.frame = CGRectMake(lx + (i % 3) * (44 + 8), y0 + (bh + gap) * 3 + 10 + (i / 3) * (44 + 8), 44, 44);
++        cb.layer.cornerRadius = 12;
+         cb.backgroundColor = vcBgraToUI(vcColorTable[i]);
+         cb.layer.borderWidth = 1.5;
+         cb.layer.borderColor = [UIColor whiteColor].CGColor;
+-        cb.tag = i + 1;
++        cb.tag = 100 + i;
+         [cb addTarget:self action:@selector(onColor:) forControlEvents:UIControlEventTouchUpInside];
+         [pg1 addSubview:cb];
+     }
++    UILabel *swL = [[UILabel alloc] initWithFrame:CGRectMake(lx + 3 * 52 + 8, y0 + (bh + gap) * 3 + 16, 80, 12)];
++    swL.text = @"图案颜色";
++    swL.font = [UIFont systemFontOfSize:8];
++    swL.textColor = VCB_GRAY;
++    [pg1 addSubview:swL];
+ 
+-    [pg1 addSubview:[self mkBtn:@"RE-INJECT" x:20 y:216 w:cw - 40 h:44 font:11 color:[UIColor colorWithRed:0.35 green:0.55 blue:0.95 alpha:1] tag:1]];
+-    [pg1 addSubview:[self mkBtn:@"EXPORT LOG" x:20 y:268 w:cw - 40 h:44 font:11 color:[UIColor colorWithRed:0.45 green:0.62 blue:0.55 alpha:1] tag:2]];
+-
+-    // ---- 页2 STATUS ----
+-    CGFloat barX = cw - 20 - 44;
+-    UILabel *enL = [[UILabel alloc] initWithFrame:CGRectMake(barX, 56, 44, 10)];
+-    enL.text = @"ENERGY";
++    // ================= STATUS 页 =================
++    // 信号源文件
++    [self mkSrcRow:pg2 y:6 label:@"视频 · video.mp4" sizeVal:&_srcVideoVal accent:VCB_CYAN];
++    [self mkSrcRow:pg2 y:54 label:@"图片 · image.jpg" sizeVal:&_srcImageVal accent:[UIColor colorWithRed:0.38 green:0.65 blue:0.98 alpha:1]];
++    _srcActiveVal = [[UILabel alloc] initWithFrame:CGRectMake(20, 104, 250, 14)];
++    _srcActiveVal.font = [UIFont boldSystemFontOfSize:9.5];
++    _srcActiveVal.textColor = VCB_GREEN;
++    [pg2 addSubview:_srcActiveVal];
++    // 挂钩链路
++    [self mkStatusRow:pg2 y:140 label:@"OC 方法交换" tag:1];
++    [self mkStatusRow:pg2 y:172 label:@"C 函数挂钩" tag:2];
++    [self mkStatusRow:pg2 y:204 label:@"GATE2 授权" tag:3];
++    [self mkStatusRow:pg2 y:236 label:@"SECKEY 验证" tag:4];
++    [self mkStatusRow:pg2 y:268 label:@"照片编码器" tag:5];
++    // 能量条
++    CGFloat barX = 286;
++    UILabel *enL = [[UILabel alloc] initWithFrame:CGRectMake(barX, 128, 44, 10)];
++    enL.text = @"能量";
+     enL.font = [UIFont systemFontOfSize:7.5];
+     enL.textColor = VCB_GRAY;
+     enL.textAlignment = NSTextAlignmentCenter;
+     [pg2 addSubview:enL];
+-    UIView *barOut = [[UIView alloc] initWithFrame:CGRectMake(barX, 78, 44, 224)];
++    UIView *barOut = [[UIView alloc] initWithFrame:CGRectMake(barX, 148, 44, 160)];
+     barOut.layer.cornerRadius = 22;
+     barOut.layer.borderWidth = 3;
+     barOut.layer.borderColor = VCB_LINE.CGColor;
+     [pg2 addSubview:barOut];
+-    UIView *barIn = [[UIView alloc] initWithFrame:CGRectMake(barX + 6, 84, 32, 212)];
+-    barIn.backgroundColor = VCB_BG;
++    UIView *barIn = [[UIView alloc] initWithFrame:CGRectMake(barX + 6, 154, 32, 148)];
++    barIn.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+     barIn.layer.cornerRadius = 16;
+     [pg2 addSubview:barIn];
+-    _barFill = [[UIView alloc] initWithFrame:CGRectMake(barX + 6, 84 + 212, 32, 0)];
++    _barFill = [[UIView alloc] initWithFrame:CGRectMake(barX + 6, 154 + 148, 32, 0)];
+     _barFill.backgroundColor = VCB_CYAN;
+     _barFill.layer.cornerRadius = 16;
+     _barFill.alpha = 0.9;
+     [pg2 addSubview:_barFill];
+ 
+-    [self mkStatusRow:pg2 y:84  label:@"OBJC SWIZZLE" tag:1];
+-    [self mkStatusRow:pg2 y:120 label:@"C FUNCTION HOOK" tag:2];
+-    [self mkStatusRow:pg2 y:156 label:@"GATE2 (license)" tag:3];
+-    [self mkStatusRow:pg2 y:192 label:@"SECKEY VERIFY" tag:4];
+-    [self mkStatusRow:pg2 y:228 label:@"PHOTO ENCODER" tag:5];
+-
+-    // 卡片级关闭按钮 (参考工程同款)
+-    [card addSubview:[self mkBtn:@"✕ CLOSE PANEL" x:20 y:480 w:cw - 40 h:42 font:13 color:[UIColor colorWithRed:0.9 green:0.33 blue:0.31 alpha:1] tag:9]];
+-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 530, cw, 10)];
+-    hint.text = @"◁▷ swipe pages · tap ball to open";
++    // 底部: 关闭面板 (必需操作键, 保留)
++    UIButton *closeBtn = [self mkBtn:@"关闭面板" tag:9 x:20 y:478 w:cw - 40 h:42 font:13
++        from:[UIColor colorWithRed:0.90 green:0.33 blue:0.31 alpha:1]
++        to:[UIColor colorWithRed:0.70 green:0.16 blue:0.16 alpha:1]];
++    [card addSubview:closeBtn];
++    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 528, cw, 10)];
++    hint.text = @"◁ ▷ 滑动翻页 · 点悬浮球打开";
+     hint.font = [UIFont systemFontOfSize:8];
+     hint.textColor = VCB_GRAY;
+     hint.textAlignment = NSTextAlignmentCenter;
+     [card addSubview:hint];
+ }
+ 
++// ---- 功能键分发 ----
++- (void)btnTap:(UIButton *)b {
++    NSInteger tag = b.tag;
++    if (tag == 9) { vcHideMenu(); return; }                 // 关闭面板
++    if (tag == 1) { [self onSelectVideo]; return; }         // 选择视频 (相册)
++    if (tag == 2) { [self onColorInject]; return; }         // 颜色注入 (RGB 输入)
++    if (tag == 3) { [self onSelectImage]; return; }         // 选择图片 (相册)
++    if (tag == 4) {                                         // 视频旋转
++        vcam_bypass_toggle_rotation();
++        [self refreshStatus];
++        return;
++    }
++    if (tag == 5) {                                         // 播放 / 暂停
++        vcam_bypass_set_pause(!vcam_bypass_get_pause());
++        [self refreshStatus];
++        return;
++    }
++    if (tag == 6) {                                         // 画面替换开关
++        vcam_bypass_set_replace(!vcam_bypass_get_replace());
++        [self refreshStatus];
++        return;
++    }
++    if (tag == 10) { [self onAddAction]; return; }          // v34 添加动作
++    if (tag == 11) { [self onActionStop]; return; }         // v34 停止动作
++    if (tag >= 100 && tag < 106) { [self onColor:(int)(tag - 100)]; }
++}
++
++// 选择视频: PHPicker 相册 (参考工程 tag1)
++- (void)onSelectVideo {
++    UIViewController *vc = vcTopVC(); if (!vc) return;
++    Class cfgCls = NSClassFromString(@"PHPickerConfiguration");
++    Class pickCls = NSClassFromString(@"PHPickerViewController");
++    Class fltCls = NSClassFromString(@"PHPickerFilter");
++    if (cfgCls && pickCls && fltCls) {
++        PHPickerConfiguration *cfg = [[cfgCls alloc] init];
++        cfg.filter = [fltCls performSelector:@selector(videosFilter)];
++        cfg.selectionLimit = 1;
++        cfg.preferredAssetRepresentationMode = 1;
++        PHPickerViewController *p = [[pickCls alloc] initWithConfiguration:cfg];
++        p.delegate = (id<PHPickerViewControllerDelegate>)[UIHlp shared];
++        [vc presentViewController:p animated:YES completion:nil];
++    } else {
++        UIImagePickerController *p = [[UIImagePickerController alloc] init];
++        p.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
++        p.mediaTypes = @[@"public.movie"];
++        p.delegate = [UIHlp shared];
++        [vc presentViewController:p animated:YES completion:nil];
++    }
++}
++
++// 选择图片: 相册 (参考工程 tag2)
++- (void)onSelectImage {
++    UIViewController *vc = vcTopVC(); if (!vc) return;
++    UIImagePickerController *p = [[UIImagePickerController alloc] init];
++    p.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
++    p.mediaTypes = @[@"public.image"];
++    p.delegate = [UIHlp shared];
++    [vc presentViewController:p animated:YES completion:nil];
++}
++
++// 颜色注入: RGB + 透明度输入
++- (void)onColorInject {
++    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"颜色注入"
++        message:@"输入 R G B (0-255) 与透明度 (0-1)" preferredStyle:UIAlertControllerStyleAlert];
++    double r = 0, g = 0, b = 0, al = 1;
++    vcam_bypass_get_color_inject(&r, &g, &b, &al);
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
++        tf.keyboardType = UIKeyboardTypeDecimalPad;
++        tf.text = [NSString stringWithFormat:@"%.0f", r * 255];
++        tf.placeholder = @"R 0-255";
++    }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
++        tf.keyboardType = UIKeyboardTypeDecimalPad;
++        tf.text = [NSString stringWithFormat:@"%.0f", g * 255];
++        tf.placeholder = @"G 0-255";
++    }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
++        tf.keyboardType = UIKeyboardTypeDecimalPad;
++        tf.text = [NSString stringWithFormat:@"%.0f", b * 255];
++        tf.placeholder = @"B 0-255";
++    }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) {
++        tf.keyboardType = UIKeyboardTypeDecimalPad;
++        tf.text = [NSString stringWithFormat:@"%.2f", al];
++        tf.placeholder = @"Alpha 0-1";
++    }];
++    [a addAction:[UIAlertAction actionWithTitle:@"应用" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
++        double rr = MIN(255, MAX(0, [a.textFields[0].text doubleValue])) / 255.0;
++        double gg = MIN(255, MAX(0, [a.textFields[1].text doubleValue])) / 255.0;
++        double bb = MIN(255, MAX(0, [a.textFields[2].text doubleValue])) / 255.0;
++        double aa = MIN(1, MAX(0, [a.textFields[3].text doubleValue]));
++        vcam_bypass_set_color_inject(1, rr, gg, bb, aa);
++        [self refreshStatus];
++    }]];
++    [a addAction:[UIAlertAction actionWithTitle:@"关闭注入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
++        vcam_bypass_set_color_inject(0, 0, 0, 0, 1);
++        [self refreshStatus];
++    }]];
++    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
++    [self presentViewController:a animated:YES completion:nil];
++}
++
++// 6 色块
++- (void)onColor:(int)i {
++    vcam_bypass_set_pattern_color(vcColorTable[i]);
++    _colorDot.backgroundColor = vcBgraToUI(vcColorTable[i]);
++    [self refreshStatus];
++}
++
+ - (void)viewWillAppear:(BOOL)a {
+     [super viewWillAppear:a];
+     [self refreshStatus];
+ }
++
++// ---- 状态刷新 ----
+ - (void)refreshStatus {
+     int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
+     vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
+-    _chipVal[0].text = vcReplaceOn() ? @"ON" : @"OFF";
+-    _chipVal[0].textColor = vcReplaceOn() ? VCB_GREEN : VCB_RED;
+-    _chipVal[1].text = vcCameraPassOn() ? @"ON" : @"OFF";
+-    _chipVal[1].textColor = vcCameraPassOn() ? VCB_GREEN : VCB_RED;
++    // 替换
++    BOOL rep = vcReplaceOn();
++    _chipVal[0].text = rep ? @"开" : @"关";
++    _chipVal[0].textColor = rep ? VCB_GREEN : VCB_RED;
++    [_btnReplace setTitle:rep ? @"画面替换 · 开" : @"画面替换 · 关" forState:UIControlStateNormal];
++    // 模式 + 来源
++    int mode = vcam_bypass_source_mode();
++    if (mode == 1) { _chipVal[1].text = @"视频"; _chipVal[1].textColor = VCB_CYAN; }
++    else if (mode == 2) { _chipVal[1].text = @"图片"; _chipVal[1].textColor = [UIColor colorWithRed:0.38 green:0.65 blue:0.98 alpha:1]; }
++    else { _chipVal[1].text = @"图案"; _chipVal[1].textColor = VCB_AMBER; }
++    // 挂钩
+     int hooks = (sw ? 1 : 0) + (cf ? 1 : 0) + (g2 ? 1 : 0) + (sk ? 1 : 0) + (pe ? 1 : 0);
+-    _chipVal[2].text = [NSString stringWithFormat:@"%d/5", hooks];
+-    _chipVal[2].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
+-    _swReplace.on = vcReplaceOn();
+-    _swCamera.on = vcCameraPassOn();
++    _chipVal[3].text = [NSString stringWithFormat:@"%d/5", hooks];
++    _chipVal[3].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
++    // 播放/暂停
++    BOOL paused = vcam_bypass_get_pause() != 0;
++    [_btnPause setTitle:paused ? @"⏸ 暂停中" : @"播放 / 暂停" forState:UIControlStateNormal];
++    // 信号源文件
++    NSString *info = vcam_bypass_source_info(); // "videoSize|imageSize"
++    NSArray *parts = [info componentsSeparatedByString:@"|"];
++    unsigned long long vsz = parts.count > 0 ? [parts[0] longLongValue] : 0;
++    unsigned long long isz = parts.count > 1 ? [parts[1] longLongValue] : 0;
++    _srcVideoVal.text = vsz > 0 ? vcHumanSize(vsz) : @"无";
++    _srcVideoVal.textColor = vsz > 0 ? VCB_CYAN : VCB_GRAY;
++    _srcImageVal.text = isz > 0 ? vcHumanSize(isz) : @"无";
++    _srcImageVal.textColor = isz > 0 ? [UIColor colorWithRed:0.38 green:0.65 blue:0.98 alpha:1] : VCB_GRAY;
++    _srcActiveVal.text = [NSString stringWithFormat:@"当前信号源：%@（等比适配 + 颜色注入）",
++        mode == 1 ? @"视频" : (mode == 2 ? @"图片" : @"图案")];
++    _srcActiveVal.textColor = rep ? VCB_GREEN : VCB_RED;
++    // 挂钩行
+     BOOL st[5] = {sw, cf, g2, sk, pe};
+-    UIColor *good = VCB_GREEN, *bad = VCB_GRAY;
+     for (int i = 0; i < 5; i++) {
+-        _stVal[i].text = st[i] ? @"ON" : @"--";
+-        _stVal[i].textColor = st[i] ? good : bad;
++        _stVal[i].text = st[i] ? @"● 开" : @"--";
++        _stVal[i].textColor = st[i] ? VCB_GREEN : VCB_GRAY;
+     }
+     [UIView animateWithDuration:0.25 animations:^{
+         CGRect f = _barFill.frame;
+-        f.size.height = 212.0 * hooks / 5.0;
+-        f.origin.y = 84 + 212 - f.size.height;
++        f.size.height = 148.0 * hooks / 5.0;
++        f.origin.y = 154 + 148 - f.size.height;
+         _barFill.frame = f;
+     }];
++    [self refreshActions];  // [PATCH-v34] 动作页状态
+ }
+-- (void)onReplace:(UISwitch *)s { vcam_bypass_set_replace(s.on); [self refreshStatus]; }
+-- (void)onCamera:(UISwitch *)s  { vcam_bypass_set_camera_pass(s.on); [self refreshStatus]; }
+-- (void)onColor:(UIButton *)b {
+-    int i = (int)b.tag - 1;
+-    vcam_bypass_set_pattern_color(vcColorTable[i]);
+-    _colorDot.backgroundColor = vcBgraToUI(vcColorTable[i]);
+-    _chipVal[3].text = [NSString stringWithUTF8String:vcColorNames[i]];
+-    [self refreshStatus];
+-}
+-- (void)btnTap:(UIButton *)b {
+-    if (b.tag == 1) { [self onRetry]; }
+-    else if (b.tag == 2) { [self onExportLog]; }
+-    else if (b.tag == 9) { vcHideMenu(); }
+-}
+-- (void)onRetry   { vcam_bypass_retry(); [self refreshStatus]; }
+-- (void)onExportLog {
+-    NSString *log = vcam_bypass_logs() ?: @"";
+-    NSString *path = @"/var/jb/var/mobile/Library/vcampro-bypass.log";
+-    [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"日志已导出"
+-        message:path preferredStyle:UIAlertControllerStyleAlert];
+-    [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+-    [self presentViewController:a animated:YES completion:nil];
++
++// 选择完成后外部刷新 (UIHlp 回调)
+++ (void)refreshIfVisible {
++    dispatch_async(dispatch_get_main_queue(), ^{
++        if (sMenuVC && sMenuVC.presentingViewController) [sMenuVC refreshStatus];
++    });
+ }
++
+ - (void)switchPage:(UIButton *)sender {
+     NSInteger pg = sender.tag;
+     [_pages setContentOffset:CGPointMake((pg - 1) * _pages.frame.size.width, 0) animated:YES];
+     [self updateTabs:pg];
+ }
+ - (void)updateTabs:(NSInteger)pg {
+-    BOOL s1 = (pg == 1), s2 = (pg == 2);
+-    _tab1.backgroundColor = s1 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+-    _tab2.backgroundColor = s2 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+-    _tab3.backgroundColor = s1 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+-    _tab4.backgroundColor = s2 ? VCB_CYAN : [UIColor colorWithWhite:1 alpha:0.08];
+-    [_tab1 setTitleColor:s1 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+-    [_tab2 setTitleColor:s2 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+-    [_tab3 setTitleColor:s1 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
+-    [_tab4 setTitleColor:s2 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
++    BOOL s1 = (pg == 1), s2 = (pg == 2), s3 = (pg == 3);
++    UIColor *sel = [UIColor colorWithRed:0.91 green:0.96 blue:1.0 alpha:1];
++    UIColor *unsel = [UIColor colorWithWhite:1 alpha:0.08];
++    _tab1.backgroundColor = s1 ? sel : unsel;
++    _tab2.backgroundColor = s2 ? sel : unsel;
++    _tab3.backgroundColor = s1 ? sel : unsel;
++    _tab4.backgroundColor = s2 ? sel : unsel;
++    _tabAct.backgroundColor = s3 ? sel : unsel;
++    [_tab1 setTitleColor:s1 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
++    [_tab2 setTitleColor:s2 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
++    [_tab3 setTitleColor:s1 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
++    [_tab4 setTitleColor:s2 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
++    [_tabAct setTitleColor:s3 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
+ }
+ - (void)scrollViewDidEndDecelerating:(UIScrollView *)sv {
+     NSInteger pg = (NSInteger)(sv.contentOffset.x / MAX(sv.frame.size.width, 1)) + 1;
+     [self updateTabs:pg];
+ }
++
++// ================= [PATCH-v34] 动作页 (VCActionSystem 集成) =================
++
++// 读 actions.json → _actData/_sActVideo/_sActVideoSize/_actDur
++- (NSArray *)vcLoadActionsSync {
++    NSMutableArray *out = [NSMutableArray array];
++    NSData *d = [NSData dataWithContentsOfFile:kActJson];
++    NSDictionary *root = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
++    if ([root isKindOfClass:NSDictionary.class]) {
++        if ([root[@"videoName"] isKindOfClass:NSString.class]) _sActVideo = root[@"videoName"];
++        if ([root[@"videoSize"] isKindOfClass:NSNumber.class]) _sActVideoSize = [root[@"videoSize"] unsignedLongLongValue];
++        if ([root[@"duration"] isKindOfClass:NSNumber.class] && [root[@"duration"] doubleValue] > 0) _actDur = [root[@"duration"] doubleValue];
++        id acts = root[@"actions"];
++        if ([acts isKindOfClass:NSArray.class]) [out addObjectsFromArray:acts];
++    }
++    _actData = out;
++    return out;
++}
++
++// 写 actions.json (同 VCActionStorage schema)
++- (void)vcSaveActionsSync {
++    NSDictionary *root = @{@"version": @1,
++                           @"videoName": _sActVideo ?: @"video.mp4",
++                           @"videoSize": @(_sActVideoSize),
++                           @"duration": @(_actDur),
++                           @"actions": _actData ?: @[]};
++    NSData *d = [NSJSONSerialization dataWithJSONObject:root options:NSJSONWritingPrettyPrinted error:nil];
++    if (d) [d writeToFile:kActJson atomically:YES];
++}
++
++// 换视频检测: video.mp4 大小与记录不一致 → 清空动作配置 (选新视频清空)
++- (void)vcCheckVideoChange {
++    NSFileManager *fm = [NSFileManager defaultManager];
++    NSDictionary *va = [fm attributesOfItemAtPath:kActVideoPath error:nil];
++    unsigned long long sz = va ? [va[NSFileSize] unsignedLongLongValue] : 0;
++    if (sz == _sActVideoSize) return;
++    _sActVideo = @"video.mp4";
++    _sActVideoSize = sz;
++    _actDur = 0;
++    _actData = [NSMutableArray array];
++    if (vcam_bypass_active_action()[0]) vcam_bypass_action_stop();
++    _sActID = nil;
++    [self vcSaveActionsSync];
++}
++
++// 动作列表重建 (最多 5 行)
++- (void)rebuildActionList {
++    for (UIView *v in _actListHost.subviews) [v removeFromSuperview];
++    if (_actData.count == 0) {
++        UILabel *e = [[UILabel alloc] initWithFrame:CGRectMake(20, 16, _actListHost.bounds.size.width - 40, 14)];
++        e.text = @"暂无动作 · 点「＋ 添加动作」创建";
++        e.font = [UIFont systemFontOfSize:9];
++        e.textColor = VCB_GRAY;
++        e.textAlignment = NSTextAlignmentCenter;
++        [_actListHost addSubview:e];
++        return;
++    }
++    NSInteger n = MIN((NSInteger)_actData.count, 5);
++    for (NSInteger i = 0; i < n; i++) {
++        UIButton *b = [self mkActionRow:i frame:CGRectMake(20, 2 + i * 42, _actListHost.bounds.size.width - 40, 36)];
++        [_actListHost addSubview:b];
++    }
++}
++
++// 动作行按钮 (播放中 cyan 高亮; 长按编辑/删除)
++- (UIButton *)mkActionRow:(NSInteger)idx frame:(CGRect)f {
++    NSDictionary *a = _actData[idx];
++    NSString *nm = [a[@"name"] isKindOfClass:NSString.class] ? a[@"name"] : @"?";
++    double st = [a[@"start"] doubleValue];
++    double en = [a[@"end"] doubleValue];
++    BOOL lp = [a[@"loop"] boolValue];
++    double sp = [a[@"speed"] doubleValue];
++    if (sp <= 0) sp = 1;
++    NSString *aid = [a[@"id"] isKindOfClass:NSString.class] ? a[@"id"] : @"";
++    BOOL act = aid.length > 0 && [aid isEqualToString:_sActID];
++    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
++    b.frame = f;
++    b.layer.cornerRadius = 10;
++    b.backgroundColor = act ? [UIColor colorWithWhite:1 alpha:0.12] : [UIColor colorWithWhite:1 alpha:0.06];
++    b.layer.borderWidth = 1;
++    b.layer.borderColor = (act ? VCB_CYAN : VCB_LINE).CGColor;
++    b.tag = 1000 + (NSInteger)idx;
++    NSString *title = [NSString stringWithFormat:@"▶ %@   %.0f–%.0fs · %@ · %.2gx",
++                       nm, st, en, lp ? @"循环" : @"一次", sp];
++    [b setTitle:title forState:UIControlStateNormal];
++    b.titleLabel.font = [UIFont boldSystemFontOfSize:9.5];
++    [b setTitleColor:act ? VCB_CYAN : VCB_TXT forState:UIControlStateNormal];
++    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
++    b.titleEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 12);
++    [b addTarget:self action:@selector(onActionTap:) forControlEvents:UIControlEventTouchUpInside];
++    UILongPressGestureRecognizer *lg = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onActionLong:)];
++    lg.minimumPressDuration = 0.5;
++    [b addGestureRecognizer:lg];
++    return b;
++}
++
++// 点击动作行: 选中并下发到引擎 (controls 字段11 actionID)
++- (void)onActionTap:(UIButton *)b {
++    NSInteger idx = b.tag - 1000;
++    if (idx >= 0 && idx < (NSInteger)_actData.count) {
++        NSString *aid = _actData[idx][@"id"];
++        if ([aid isKindOfClass:NSString.class]) vcam_bypass_set_action([aid UTF8String]);
++    }
++    [self refreshActions];
++}
++
++// 长按动作行: 编辑 / 删除
++- (void)onActionLong:(UILongPressGestureRecognizer *)g {
++    if (g.state != UIGestureRecognizerStateBegan) return;
++    UIButton *b = (UIButton *)g.view;
++    if (![b isKindOfClass:UIButton.class]) return;
++    NSInteger idx = b.tag - 1000;
++    if (idx < 0 || idx >= (NSInteger)_actData.count) return;
++    NSDictionary *a = _actData[idx];
++    NSString *aid = [a[@"id"] isKindOfClass:NSString.class] ? a[@"id"] : @"";
++    UIAlertController *as = [UIAlertController alertControllerWithTitle:
++        [a[@"name"] isKindOfClass:NSString.class] ? a[@"name"] : @"动作"
++        message:@"长按动作: 编辑或删除" preferredStyle:UIAlertControllerStyleActionSheet];
++    if (as.popoverPresentationController) as.popoverPresentationController.sourceView = b;
++    [as addAction:[UIAlertAction actionWithTitle:@"编辑" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
++        [self showActionForm:idx edit:a];
++    }]];
++    [as addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) {
++        [_actData removeObjectAtIndex:idx];
++        if (_sActID && aid.length > 0 && [aid isEqualToString:_sActID]) {
++            _sActID = nil;
++            vcam_bypass_action_stop();
++        }
++        [self vcSaveActionsSync];
++        [self refreshActions];
++    }]];
++    [as addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
++    [self presentViewController:as animated:YES completion:nil];
++}
++
++// 添加/编辑动作表单 (名称/开始/结束/循环/速度)
++- (void)showActionForm:(NSInteger)idx edit:(NSDictionary *)edit {
++    NSString *onm = @"", *ost = @"0", *oen = @"5", *oloop = @"1", *osp = @"1";
++    if (edit) {
++        onm = [edit[@"name"] isKindOfClass:NSString.class] ? edit[@"name"] : @"";
++        ost = [NSString stringWithFormat:@"%.2f", [edit[@"start"] doubleValue]];
++        oen = [NSString stringWithFormat:@"%.2f", [edit[@"end"] doubleValue]];
++        oloop = [edit[@"loop"] boolValue] ? @"1" : @"0";
++        osp = [NSString stringWithFormat:@"%.2f", [edit[@"speed"] doubleValue]];
++    }
++    UIAlertController *a = [UIAlertController alertControllerWithTitle:edit ? @"编辑动作" : @"添加动作"
++        message:@"名称 / 开始秒 / 结束秒 / 循环(0关1开) / 速度(0.5-2x)" preferredStyle:UIAlertControllerStyleAlert];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.text = onm; tf.placeholder = @"动作名称"; }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.keyboardType = UIKeyboardTypeDecimalPad; tf.text = ost; tf.placeholder = @"开始秒数"; }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.keyboardType = UIKeyboardTypeDecimalPad; tf.text = oen; tf.placeholder = @"结束秒数"; }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.keyboardType = UIKeyboardTypeNumbersAndPunctuation; tf.text = oloop; tf.placeholder = @"0/1"; }];
++    [a addTextFieldWithConfigurationHandler:^(UITextField *tf) { tf.keyboardType = UIKeyboardTypeDecimalPad; tf.text = osp; tf.placeholder = @"0.5 0.75 1 1.5 2"; }];
++    [a addAction:[UIAlertAction actionWithTitle:edit ? @"更新" : @"添加" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
++        NSString *nm = [a.textFields[0].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
++        double st = [a.textFields[1].text doubleValue];
++        double en = [a.textFields[2].text doubleValue];
++        BOOL lp = [a.textFields[3].text intValue] != 0;
++        double sp = [a.textFields[4].text doubleValue];
++        if (nm.length == 0 || st < 0 || en <= st + 0.05) return;
++        if (_actDur > 0 && en > _actDur + 0.5) return;
++        if (sp < 0.1 || sp > 4.0) sp = 1.0;
++        NSString *aid;
++        if (edit && [edit[@"id"] isKindOfClass:NSString.class]) {
++            aid = edit[@"id"];
++            NSDictionary *upd = @{@"id": aid, @"name": nm, @"start": @(st), @"end": @(en), @"loop": @(lp), @"speed": @(sp)};
++            [_actData replaceObjectAtIndex:idx withObject:upd];
++        } else {
++            aid = [[NSUUID UUID] UUIDString];
++            [_actData addObject:@{@"id": aid, @"name": nm, @"start": @(st), @"end": @(en), @"loop": @(lp), @"speed": @(sp)}];
++        }
++        [self vcSaveActionsSync];
++        if (vcam_bypass_active_action()[0]) vcam_bypass_set_action([aid UTF8String]);
++        [self refreshActions];
++    }]];
++    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
++    [self presentViewController:a animated:YES completion:nil];
++}
++
++- (void)onAddAction { [self showActionForm:-1 edit:nil]; }
++
++- (void)onActionStop {
++    vcam_bypass_action_stop();
++    _sActID = nil;
++    [self refreshActions];
++}
++
++// 动作页整体刷新: 引擎状态 → 配置同步 → 列表重建 → 芯片/信息行
++- (void)refreshActions {
++    @try {
++        const char *aa = vcam_bypass_active_action();
++        _sActID = (aa && aa[0]) ? [NSString stringWithUTF8String:aa] : nil;
++        if (!_actData) [self vcLoadActionsSync];
++        [self vcCheckVideoChange];
++        if (_actDur <= 0 && vcam_bypass_source_mode() == 1) {
++            __weak typeof(self) wself = self;
++            AVURLAsset *asset = [AVURLAsset assetWithURL:[NSURL fileURLWithPath:kActVideoPath]];
++            [asset loadValuesAsynchronouslyForKeys:@[@"duration"] completionHandler:^{
++                double dt = CMTimeGetSeconds(asset.duration);
++                if (dt > 0) {
++                    dispatch_async(dispatch_get_main_queue(), ^{
++                        _actDur = dt;
++                        [wself vcSaveActionsSync];
++                        [wself rebuildActionList];
++                        [wself refreshActionChipsStatus];
++                    });
++                }
++            }];
++        }
++        [self rebuildActionList];
++        [self refreshActionChipsStatus];
++    } @catch (NSException *e) {}
++}
++
++// 动作页芯片与信息行
++- (void)refreshActionChipsStatus {
++    BOOL act = _sActID.length > 0;
++    _actModeVal.text = act ? @"动作" : @"普通";
++    _actModeVal.textColor = act ? VCB_CYAN : VCB_GRAY;
++    _actStateVal.text = act ? @"播放中" : @"停止";
++    _actStateVal.textColor = act ? VCB_GREEN : VCB_GRAY;
++    NSString *dur = _actDur > 0 ? [NSString stringWithFormat:@"%.1fs", _actDur] : @"--";
++    NSString *nm = @"";
++    if (act) {
++        for (NSDictionary *d in _actData) {
++            if ([d[@"id"] isKindOfClass:NSString.class] && [d[@"id"] isEqualToString:_sActID]
++                && [d[@"name"] isKindOfClass:NSString.class]) { nm = [NSString stringWithFormat:@" · ▶ %@", d[@"name"]]; break; }
++        }
++    }
++    _actInfoVal.text = [NSString stringWithFormat:@"视频 video.mp4 · %@ · 动作 %lu 个%@",
++                        dur, (unsigned long)_actData.count, nm];
++}
+ @end
+ 
+ // ============================================================
+ #pragma mark - 窗口管理 / 音量入口
+ // ============================================================
+ static BOOL vcReplaceOn(void)     { return vcam_bypass_get_replace() != 0; }
+-static BOOL vcCameraPassOn(void)  { return vcam_bypass_get_camera_pass() != 0; }
+ 
+ // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
+ static UIViewController *vcTopVC(void) {
+@@ -499,21 +1079,15 @@ void vcToggleMenu(void) {
+ }
+ 
+ // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
+-// 原实现直接强转调用 (F)method_getImplementation(m) —— runtime 返回的 IMP
+-// 已带 ptrauth 签名, 在 arm64e (iPhone XS+) 安全;
+-// 不要用 method_invoke: 它在 arm64e 上对 IMP 签名处理不当会崩 SpringBoard
+-// (症状: 按音量键屏幕黑屏/锁屏).
++// 直接强转调用 (F)method_getImplementation(m) —— runtime 返回的 IMP 已带
++// ptrauth 签名, 在 arm64e (iPhone XS+) 安全; 不要用 method_invoke
++// (arm64e 上 IMP 签名处理不当会崩 SpringBoard: 按音量键黑屏/锁屏).
+ static void vcVolumeInstall(void) {
+     @try {
+         Class cls = NSClassFromString(@"SBVolumeControl");
+-        NSLog(@"[vcbUI] SBVolumeControl class: %@",
+-              cls ? NSStringFromClass(cls) : @"(nil)");
+         if (!cls) return;
+         Method up = class_getInstanceMethod(cls, @selector(increaseVolume));
+         Method dn = class_getInstanceMethod(cls, @selector(decreaseVolume));
+-        NSLog(@"[vcbUI] up=%s dn=%s",
+-              up ? method_getTypeEncoding(up) : "(nil)",
+-              dn ? method_getTypeEncoding(dn) : "(nil)");
+         if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
+         typedef void (*vcVolFn)(id, SEL);
+         vcVolFn origUp = (vcVolFn)method_getImplementation(up);
+@@ -547,16 +1121,18 @@ void vcap_ui_mount(void) {
+         if (sInstalled) return;
+         sInstalled = YES;
+         NSString *proc = [[NSProcessInfo processInfo] processName];
+-        if (![proc isEqualToString:@"SpringBoard"]) return; // mediaserverd: no-op
+-        // 延迟到主线程 + SpringBoard 启动稳定后, 避开 ctor 早期注入时序
+-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
++        if (![proc isEqualToString:@"SpringBoard"]) {
++            NSLog(@"[vcbUI] skip mount in %@", proc);
++            return;
++        }
++        // 等 SpringBoard 主界面就绪后再挂 (避免 Safe Mode)
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
+                        dispatch_get_main_queue(), ^{
+-            @try { vcVolumeInstall(); } @catch (NSException *e) {
+-                NSLog(@"[vcbUI] volume install delayed fail: %@", e);
+-            }
+-            NSLog(@"[vcbUI] volume entry installed in SpringBoard");
++            vcShowBall();
++            vcVolumeInstall();
+         });
++        NSLog(@"[vcbUI] mount scheduled for SpringBoard");
+     } @catch (NSException *e) {
+         NSLog(@"[vcbUI] mount fail: %@", e);
+     }
+-}
+\ No newline at end of file
++}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..90d626b 100644
+index 9bc858c..affe13f 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -16,6 +16,31 @@
- #import <Security/Security.h>
- #import <CoreVideo/CoreVideo.h>
- #import <VideoToolbox/VideoToolbox.h>
+@@ -1,370 +1,955 @@
+-// vcam125 bypass tweak — runtime hook (NO __text disk modification)
+-//
+-// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
+-// callback 监听 vcameracrack 加载时刻, 立即 swap ObjC method IMP + MSHookFunction
+-// internal C function (gate2) + framework SecKeyVerifySignature.
+-//
+-// vcam125 dylib 在磁盘上一个字节没动 → 没 PAC/codesign/RootHide 装载层风险.
+-// 之前 v6-v14 全因 patch dylib 字节让 SB 卡 boot, v15 走完全不同的路.
+-
+-#import <Foundation/Foundation.h>
+-#import <objc/runtime.h>
+-#import <objc/message.h>
+-#import <mach-o/dyld.h>
+-#import <dlfcn.h>
+-#import <substrate.h>
+-#import <Security/Security.h>
+-#import <CoreVideo/CoreVideo.h>
+-#import <VideoToolbox/VideoToolbox.h>
+-
+-// ============== Replacement IMPs ==============
+-
+-static BOOL r_isLicenseValid(id self, SEL _cmd) { return YES; }
+-static BOOL r_loadPersistedLicense(id self, SEL _cmd) { return YES; }
+-static NSString *r_licenseStatusString(id self, SEL _cmd) {
+-    return @"已授权 (v15 bypass)";
+-}
+-static unsigned int r_features(id self, SEL _cmd) { return 0xFFFFFFFFU; }
+-static long long r_expiryUnix(id self, SEL _cmd) { return 4070908800LL; }  // 2099
+-
+-static BOOL r_VC_isEnabled(id self, SEL _cmd) { return YES; }
+-__attribute__((unused))
+-static BOOL r_VC_hasReplacementFrame(id self, SEL _cmd) { return YES; }
+-// v20: bootstrap LVP decoding + VT transfer 替换
+-// 之前 v19 hasValidFrame=NO 因为 vcam125 内部从来没调 setVideoSize/startDecodingThread
+-// (那条 trigger 链在我们 short-circuit renderReplacement 时断了). 自己 bootstrap.
+-static VTPixelTransferSessionRef s_xferSession = NULL;
+-static int s_lvpBootstrapped = 0;
+-
+-__attribute__((unused))
+-static void v22_bootstrapLVP(CVPixelBufferRef dst) {
+-    if (s_lvpBootstrapped) return;
+-    Class lvpCls = objc_getClass("LocalVideoPlayer");
+-    if (!lvpCls) return;
+-    id lvp = ((id (*)(Class, SEL))objc_msgSend)(lvpCls, sel_registerName("sharedInstance"));
+-    if (!lvp) return;
+-    size_t w = CVPixelBufferGetWidth(dst);
+-    size_t h = CVPixelBufferGetHeight(dst);
+-    if (w == 0 || h == 0) return;
+-
+-    @try {
+-        // v22: 用 KVC 直接写 ivar (避免 ARM64 ABI struct passing 问题)
+-        NSNumber *wNum = [NSNumber numberWithUnsignedLong:w];
+-        NSNumber *hNum = [NSNumber numberWithUnsignedLong:h];
+-        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(
+-            lvp, sel_registerName("setValue:forKey:"), wNum, @"_targetWidth");
+-        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(
+-            lvp, sel_registerName("setValue:forKey:"), hNum, @"_targetHeight");
+-
+-        // 触发 decode thread + frame timer + 重 load
+-        ((void (*)(id, SEL))objc_msgSend)(lvp, sel_registerName("reloadVideo"));
+-        ((void (*)(id, SEL, NSInteger))objc_msgSend)(lvp, sel_registerName("startDecodingThreadForGeneration:"), (NSInteger)1);
+-        ((void (*)(id, SEL, NSInteger))objc_msgSend)(lvp, sel_registerName("startFrameTimerForGeneration:"), (NSInteger)1);
+-        ((void (*)(id, SEL))objc_msgSend)(lvp, sel_registerName("play"));
+-
+-        NSLog(@"[v22bypass] LVP bootstrap: KVC _targetWidth=%zu _targetHeight=%zu + reload + startDecode + play", w, h);
+-        s_lvpBootstrapped = 1;
+-    } @catch (NSException *e) {
+-        NSLog(@"[v22bypass] LVP bootstrap fail: %@", e);
+-    }
+-}
+-
+-// v23: 生成一个纯色 BGRA test pattern, lazy cache. 用来验证 hook+VT transfer 端到端 work.
+-static CVPixelBufferRef s_testPattern = NULL;
+-static size_t s_testW = 0, s_testH = 0;
+-
+-static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
+-    if (s_testPattern && s_testW == w && s_testH == h) return s_testPattern;
+-    if (s_testPattern) { CVPixelBufferRelease(s_testPattern); s_testPattern = NULL; }
+-
+-    NSDictionary *attrs = @{
+-        (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
+-        (id)kCVPixelBufferMetalCompatibilityKey: @YES,
+-    };
+-    CVPixelBufferRef buf = NULL;
+-    CVReturn r = CVPixelBufferCreate(kCFAllocatorDefault, w, h,
+-                                     kCVPixelFormatType_32BGRA,
+-                                     (__bridge CFDictionaryRef)attrs, &buf);
+-    if (r != kCVReturnSuccess || !buf) return NULL;
+-
+-    // Fill with bright red BGRA: B=0, G=0, R=255, A=255 (per pixel: 00 00 FF FF)
+-    CVPixelBufferLockBaseAddress(buf, 0);
+-    uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(buf);
+-    size_t bpr = CVPixelBufferGetBytesPerRow(buf);
+-    for (size_t y = 0; y < h; y++) {
+-        uint32_t *row = (uint32_t *)(base + y * bpr);
+-        for (size_t x = 0; x < w; x++) {
+-            // BGRA order: B=00 G=00 R=FF A=FF → little-endian uint32 = 0xFFFF0000
+-            row[x] = 0xFFFF0000U;
+-        }
+-    }
+-    CVPixelBufferUnlockBaseAddress(buf, 0);
+-    s_testPattern = buf;
+-    s_testW = w; s_testH = h;
+-    NSLog(@"[v23bypass] created %zux%zu BGRA red test pattern", w, h);
+-    return buf;
+-}
+-
+-// v26: 3rd party / 网页 OK (BWNodeOutput.emit, photoFlag=0). Apple Camera 黑 (BWPhotoEncoder, photoFlag=1).
+-// 所以 photoFlag=1 路径不 transfer (Apple Camera 显示真画面不黑屏).
+-// 3rd party 路径正常 transfer (看到假画面).
+-static void v23_doReplace(CVPixelBufferRef dst) {
+-    if (!dst) return;
+-    size_t w = CVPixelBufferGetWidth(dst);
+-    size_t h = CVPixelBufferGetHeight(dst);
+-    if (w == 0 || h == 0) return;
+-
+-    CVPixelBufferRef src = v23_getTestPattern(w, h);
+-    if (!src) return;
+-
+-    if (!s_xferSession) {
+-        OSStatus s = VTPixelTransferSessionCreate(kCFAllocatorDefault, &s_xferSession);
+-        if (s != noErr) return;
+-        VTSessionSetProperty(s_xferSession, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_Trim);
+-    }
+-    VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
+-}
+-
+-static void r_VC_renderReplacementToPixelBuffer(id self, SEL _cmd, CVPixelBufferRef pb) {
+-    // 3rd party / 网页 path (BWNodeOutput.emit, photoCompensation=0)
+-    v23_doReplace(pb);
+-}
+-static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _cmd, CVPixelBufferRef pb, int flag) {
+-    // v26: Apple Camera (flag=1) 路径下 BWPhotoEncoder.render orig 对 modified dst 敏感
+-    // → 黑屏. 跳过 transfer 让 Apple Camera 显示真画面 (no crash, no replacement).
+-    // 3rd party 应该不会到这里 (它走 renderReplacementToPixelBuffer:, 不带 flag)
+-    if (flag) return;
+-    v23_doReplace(pb);
+-}
+-
+-// ============== gate2 hook (vcam125 internal C function @ 0xe9f4) ==============
+-
+-typedef int (*gate2_fn_t)(void);
+-static gate2_fn_t orig_gate2 = NULL;
+-static int my_gate2(void) { return 1; }
+-
+-// ============== SecKeyVerifySignature hook (Apple framework) ==============
+-
+-typedef Boolean (*SecKeyVerifySig_fn_t)(SecKeyRef, CFStringRef, CFDataRef, CFDataRef, CFErrorRef *);
+-static SecKeyVerifySig_fn_t orig_SecKeyVerifySig = NULL;
+-static Boolean my_SecKeyVerifySig(SecKeyRef key, CFStringRef alg, CFDataRef signed_data, CFDataRef sig, CFErrorRef *err) {
+-    if (err) *err = NULL;
+-    return true;
+-}
+-
+-// ============== Helpers ==============
+-
+-static void swizzle_class(Class cls, SEL sel, IMP newImp, const char *label) {
+-    if (!cls) return;
+-    Method m = class_getClassMethod(cls, sel);
+-    if (m) {
+-        method_setImplementation(m, newImp);
+-        NSLog(@"[v15bypass] swap +[%s %s]", class_getName(cls), sel_getName(sel));
+-    } else {
+-        NSLog(@"[v15bypass] +[%s %s] not found", class_getName(cls), sel_getName(sel));
+-    }
+-}
+-static void swizzle_inst(Class cls, SEL sel, IMP newImp, const char *label) {
+-    if (!cls) return;
+-    Method m = class_getInstanceMethod(cls, sel);
+-    if (m) {
+-        method_setImplementation(m, newImp);
+-        NSLog(@"[v15bypass] swap -[%s %s]", class_getName(cls), sel_getName(sel));
+-    } else {
+-        NSLog(@"[v15bypass] -[%s %s] not found", class_getName(cls), sel_getName(sel));
+-    }
+-}
+-
+-// ============== dyld add_image callback ==============
+-
+-static int s_didCFunctionHooks = 0;
+-static int s_didObjCSwizzle = 0;
+-static const struct mach_header *s_vcamMh = NULL;
+-
+-// vcam125 globals (offsets from dylib base, found via static reverse)
+-//   g_isLicenseValid  byte @ 0x63ab4
+-//   g_features        uint32 LE @ 0x63ab8
+-//   g_runtime_keys    32 bytes @ 0x63abc
+-//   g_expiry          x64 @ 0x63980 (large value, unix-ish)
+-static void writeVcamIvars(const struct mach_header *mh) {
+-    if (!mh) return;
+-    uint8_t *base = (uint8_t *)mh;
+-    @try {
+-        // g_isLicenseValid = 1
+-        *(volatile uint8_t *)(base + 0x63ab4) = 1;
+-        // g_features = 0xFFFFFFFF
+-        *(volatile uint32_t *)(base + 0x63ab8) = 0xFFFFFFFFU;
+-        // g_runtime_keys = 32 bytes of 0x42 (consistent pattern, not 0/random)
+-        for (int i = 0; i < 32; i++) {
+-            ((volatile uint8_t *)(base + 0x63abc))[i] = 0x42;
+-        }
+-        // g_expiry (uint64 LE) = 2099 unix
+-        *(volatile uint64_t *)(base + 0x63980) = 4070908800ULL;
+-    } @catch (NSException *e) {
+-        NSLog(@"[v17bypass] writeVcamIvars exception: %@", e);
+-    }
+-}
+-
+-// Periodically re-write ivars to enforce in case vcam125 internal code clears them
+-static void startIvarEnforcer(void) {
+-    static int s_started = 0;
+-    if (s_started) return;
+-    s_started = 1;
+-    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0);
+-    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
+-    dispatch_source_set_timer(timer,
+-                              dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+-                              100 * NSEC_PER_MSEC,  // every 100ms
+-                              10 * NSEC_PER_MSEC);
+-    dispatch_source_set_event_handler(timer, ^{
+-        if (s_vcamMh) writeVcamIvars(s_vcamMh);
+-    });
+-    dispatch_resume(timer);
+-    NSLog(@"[v17bypass] ivar enforcer timer started (100ms interval)");
+-}
+-
+-// v30: 回到 v28 的 MSHookFunction passthrough 路线 (v28 实测 video mode work)
+-// + 加 BWStillImageScaler passthrough (修 photo mode)
+-typedef void (*render_fn_t)(id, SEL, CMSampleBufferRef, id);
+-static render_fn_t orig_photoenc_newImp = NULL;
+-static const struct mach_header *s_mh_for_render = NULL;
+-// vcam125 stash slots:
+-//   0x639d0 = BWNodeOutput.emit orig (保持 vcam125 hook → 3rd party 红色)
+-//   0x639d8 = BWStillImageScalerNode.render orig (v31 用 method_setImpl 重装)
+-//   0x639e0 = BWPhotoEncoderNode.render orig (MSHookFunction passthrough)
+-static void my_photoenc_passthrough(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
+-    if (!s_mh_for_render) return;
+-    render_fn_t orig = *(render_fn_t *)((const uint8_t *)s_mh_for_render + 0x639e0);
+-    if (orig) orig(self, _cmd, sb, input);
+-}
+-
+-// Apply C-function hooks (gate2 + SecKey) — these only need vcam125 dylib loaded
+-static void applyCHooks(const struct mach_header *mh) {
+-    if (s_didCFunctionHooks) return;
+-    s_didCFunctionHooks = 1;
+-
+-    s_mh_for_render = mh;
+-
+-    // gate2 (vcam125 dylib base + 0xe9f4)
+-    void *gate2_addr = (void *)((uintptr_t)mh + 0xe9f4);
+-    @try {
+-        MSHookFunction(gate2_addr, (void *)my_gate2, (void **)&orig_gate2);
+-        NSLog(@"[v27bypass] gate2 @ %p hooked", gate2_addr);
+-    } @catch (NSException *e) {
+-        NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
+-    }
+-
+-    // SecKeyVerifySignature framework hook
+-    void *sec_ptr = dlsym(RTLD_DEFAULT, "SecKeyVerifySignature");
+-    if (sec_ptr && !orig_SecKeyVerifySig) {
+-        @try {
+-            MSHookFunction(sec_ptr, (void *)my_SecKeyVerifySig, (void **)&orig_SecKeyVerifySig);
+-            NSLog(@"[v27bypass] SecKeyVerifySignature hooked");
+-        } @catch (NSException *e) {
+-            NSLog(@"[v27bypass] SecKeyVerifySig hook FAILED: %@", e);
+-        }
+-    }
+-
+-    // v31: 只 MSHookFunction BWPhotoEncoder (v28 work 的方式)
+-    // BWStillImageScaler 0xe234 不能 MSHookFunction — 与 0xe240 间距 12B, trampoline 16B 会重叠崩
+-    // 改在 tryObjCSwizzle 延迟 retry 里 method_setImplementation 替换 (vcam125 +load 完成后)
+-    void *photoenc_addr = (void *)((uintptr_t)mh + 0xe240);
+-    @try {
+-        MSHookFunction(photoenc_addr, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
+-        NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
+-    } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
+-}
+-
+-// Try ObjC class swizzle — called repeatedly until classes appear
+-static void tryObjCSwizzle(int retriesLeft) {
+-    if (s_didObjCSwizzle) return;
+-    Class lc = objc_getClass("LicenseCore");
+-    Class vc = objc_getClass("VCamCore");
+-    if (!lc || !vc) {
+-        if (retriesLeft <= 0) {
+-            NSLog(@"[v16bypass] gave up swizzle: lc=%@ vc=%@ (classes never appeared after 100 retries)",
+-                  lc, vc);
+-            return;
+-        }
+-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
+-                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+-                       ^{ tryObjCSwizzle(retriesLeft - 1); });
+-        return;
+-    }
+-
+-    s_didObjCSwizzle = 1;
+-    NSLog(@"[v16bypass] *** classes appeared after retry, swizzling now");
+-
+-    swizzle_class(lc, @selector(isLicenseValid),       (IMP)r_isLicenseValid,       "isLicenseValid");
+-    swizzle_class(lc, @selector(loadPersistedLicense), (IMP)r_loadPersistedLicense, "loadPersistedLicense");
+-    swizzle_class(lc, @selector(licenseStatusString),  (IMP)r_licenseStatusString,  "licenseStatusString");
+-    swizzle_class(lc, @selector(features),             (IMP)r_features,             "features");
+-    swizzle_class(lc, @selector(expiryUnix),           (IMP)r_expiryUnix,           "expiryUnix");
+-    swizzle_inst(vc, @selector(isEnabled),             (IMP)r_VC_isEnabled,            "VC.isEnabled");
+-
+-    // v31: 此时 vcam125 +load 已完成 (我们 retry 等 class 出现 = vcam125 init done).
+-    // 从 vcam125 stash slot +0x639d8 读 BWStillImageScaler.render Apple orig, 重装回 class.
+-    // 不能 MSHookFunction 0xe234 因与 0xe240 trampoline 重叠.
+-    if (s_mh_for_render) {
+-        @try {
+-            IMP stillscale_orig = *(IMP *)((const uint8_t *)s_mh_for_render + 0x639d8);
+-            Class scaleCls = objc_getClass("BWStillImageScalerNode");
+-            if (scaleCls && stillscale_orig) {
+-                Method m = class_getInstanceMethod(scaleCls, sel_registerName("renderSampleBuffer:forInput:"));
+-                if (m) {
+-                    method_setImplementation(m, stillscale_orig);
+-                    NSLog(@"[v31bypass] BWStillImageScalerNode.render restored to Apple orig %p", stillscale_orig);
+-                }
+-            }
+-        } @catch (NSException *e) { NSLog(@"[v31bypass] stillscale restore err: %@", e); }
+-    }
+-    // 我们替换了 renderReplacement → 强制 emit hook 调我们的 (vcam125 原版崩)
+-    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:), (IMP)r_VC_renderReplacementToPixelBuffer, "VC.renderReplPB");
+-    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:photoCompensation:), (IMP)r_VC_renderReplacementToPixelBuffer_photoCompensation, "VC.renderReplPB:photo");
+-    // v21: 重新加 hasReplacementFrame=YES, 强制 emit hook 调到我们的 renderReplacement
+-    // (v18-v20 移除让 emit hook 在 step 6 bail, 我们 hook 永远没机会跑 → chicken-egg
+-    // LVP 永远不解码). 现在我们的 renderReplacement 已经替换 vcam125 原版 → 调进来不会崩.
+-    swizzle_inst(vc, @selector(hasReplacementFrame), (IMP)r_VC_hasReplacementFrame, "VC.hasReplacementFrame");
+-    NSLog(@"[v16bypass] *** ObjC swizzle complete");
+-}
+-
+-static void onImageLoad(const struct mach_header *mh, intptr_t slide) {
+-    Dl_info info;
+-    if (dladdr((const void *)mh, &info) == 0) return;
+-    if (!info.dli_fname) return;
+-    if (!strstr(info.dli_fname, "vcameracrack")) return;
+-
+-    NSLog(@"[v17bypass] *** vcameracrack loaded at %p slide=0x%lx path=%s",
+-          mh, (unsigned long)slide, info.dli_fname);
+-    s_vcamMh = mh;
+-
+-    // C-function hooks immediately
+-    applyCHooks(mh);
+-
+-    // Write ivars NOW (before vcam125 +load tries to verify license)
+-    writeVcamIvars(mh);
+-
+-    // Start periodic re-write timer to enforce against vcam125's own clearing
+-    startIvarEnforcer();
+-
+-    // ObjC class hooks deferred via retry
+-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+-        tryObjCSwizzle(100);
+-    });
+-}
+-
+-// ============== ctor — register dyld callback ==============
+-
+-__attribute__((constructor))
+-static void v16_init(void) {
+-    NSString *proc = [[NSProcessInfo processInfo] processName];
+-    NSLog(@"[v16bypass] ctor in process: %@", proc);
+-    _dyld_register_func_for_add_image(onImageLoad);
+-    NSLog(@"[v16bypass] dyld add_image callback registered");
+-
+-    // ALSO start an independent retry loop in case dyld callback never sees vcameracrack
+-    // (already-loaded edge case — though dyld should fire for already-loaded images)
+-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
+-                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+-                   ^{ tryObjCSwizzle(100); });
+-}
++// vcam125 bypass tweak — runtime hook (NO __text disk modification)
++//
++// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
++// callback 监听 vcameracrack 加载时刻, 立即 swap ObjC method IMP + MSHookFunction
++// internal C function (gate2) + framework SecKeyVerifySignature.
++//
++// vcam125 dylib 在磁盘上一个字节没动 → 没 PAC/codesign/RootHide 装载层风险.
++// 之前 v6-v14 全因 patch dylib 字节让 SB 卡 boot, v15 走完全不同的路.
++
++#import <Foundation/Foundation.h>
++#import <objc/runtime.h>
++#import <objc/message.h>
++#import <mach-o/dyld.h>
++#import <dlfcn.h>
++#import <substrate.h>
++#import <Security/Security.h>
++#import <CoreVideo/CoreVideo.h>
++#import <VideoToolbox/VideoToolbox.h>
 +#import <stdarg.h>
++#import <AVFoundation/AVFoundation.h>
++#import <CoreImage/CoreImage.h>
++#import <CoreMedia/CoreMedia.h>
++#import <QuartzCore/QuartzCore.h>
 +
 +// ===== [PATCH-v32] UI 控制/状态接口 (VCamBypassUI 模块调用) =====
 +// .xm 编译为 C++, 跨模块接口必须 extern "C" 以匹配 ObjC 模块的 C 符号
@@ -52,64 +1621,797 @@ index 9bc858c..90d626b 100644
 +#ifdef __cplusplus
 +}
 +#endif
- 
- // ============== Replacement IMPs ==============
- 
-@@ -95,7 +120,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
-         uint32_t *row = (uint32_t *)(base + y * bpr);
-         for (size_t x = 0; x < w; x++) {
-             // BGRA order: B=00 G=00 R=FF A=FF → little-endian uint32 = 0xFFFF0000
--            row[x] = 0xFFFF0000U;
++
++// ===== [PATCH-v33] 视频/图片替换管线 (vcamplus 架构移植, 参考主源码) =====
++// 跨进程: UI(SpringBoard) 写 VCAM_FLAG controls 文件 → 替换进程 v23_doReplace
++// 每帧轮询(0.3s 节流)读取应用. 格式对齐主源码: "1,rot,flip,pause,colorInject,R,G,B,alpha,replace,patternColor"
++#define VCAM_DIR   @"/var/jb/var/mobile/Library/vcamplus"
++#define VCAM_VIDEO VCAM_DIR @"/video.mp4"
++#define VCAM_IMAGE VCAM_DIR @"/image.jpg"
++#define VCAM_FLAG  VCAM_DIR @"/enabled"
++
++static NSLock *gLockA = nil;
++static AVAssetReader *gReaderA = nil;
++static AVAssetReaderTrackOutput *gOutputA = nil;
++static CIImage *gPausedFrame = nil;
++static CIContext *gCICtx = nil;
++static int gVideoRotation = 0;
++static int gVideoFlipH = 0;
++static int gVideoPaused = 0;
++static int gColorInject = 0;
++static double gInjectR = 0, gInjectG = 0, gInjectB = 0, gInjectAlpha = 0.0;
++static CVPixelBufferRef s_testPattern = NULL; // 前移声明: vcam_applyControls 需要 (定义见 v23_getTestPattern)
++
++// ===== [PATCH-v34] 动作分段引擎 (VCActionSystem 移植 · 独立模块) =====
++#define VCAM_ACTIONS VCAM_DIR @"/actions.json"
++
++static char gActionID[64] = "";
++static int gActionStop = 0;         // 一次性停止信号 (UI 写 1, 引擎读到即复位)
++static int gActionActive = 0;       // 引擎当前是否在区间模式
++static double gActionStart = 0, gActionEnd = 0;
++static int gActionLoop = 0;
++static float gActionSpeed = 1.0f;
++static double gActionFrameDur = 1.0 / 30.0;
++static double gActionNextPos = 0;   // speed>=1 时的输出目标时间
++static double gRepeatAcc = 0;       // speed<1 时帧复用累加器
++static CVPixelBufferRef gActionHold = NULL;  // 慢放复用/无循环定格帧 (retained)
++static NSArray *gActionsCfg = nil;  // actions.json actions[] (NSDictionary 数组)
++static uint64_t gActionCfgMtime = 0;
++
++static BOOL vcam_videoExists(void) {
++    return [[NSFileManager defaultManager] fileExistsAtPath:VCAM_VIDEO];
++}
++static BOOL vcam_imageExists(void) {
++    return [[NSFileManager defaultManager] fileExistsAtPath:VCAM_IMAGE];
++}
++
++// 打开视频读取器 (BGRA 输出, 与替换管线格式一致)
++static BOOL vcam_openReader(AVAssetReader *__strong *rdr, AVAssetReaderTrackOutput *__strong *out) {
++    @try {
++        *rdr = nil; *out = nil;
++        if (!vcam_videoExists()) return NO;
++        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:VCAM_VIDEO]
++                             options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @NO}];
++        NSArray *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
++        if (tracks.count == 0) return NO;
++        NSError *err = nil;
++        AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&err];
++        if (!reader || err) return NO;
++        NSDictionary *s = @{(NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
++        AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:tracks[0] outputSettings:s];
++        output.alwaysCopiesSampleData = YES;
++        if (![reader canAddOutput:output]) return NO;
++        [reader addOutput:output];
++        if (![reader startReading]) return NO;
++        *rdr = reader; *out = output; return YES;
++    } @catch (NSException *e) { return NO; }
++}
++
++// [PATCH-v34] 区间读取器: timeRange(start..end) 在 startReading 前设置, 区间外采样被丢弃
++static BOOL vcam_openReaderForRange(AVAssetReader *__strong *rdr, AVAssetReaderTrackOutput *__strong *out,
++                                    double startSec, double endSec) {
++    @try {
++        *rdr = nil; *out = nil;
++        if (!vcam_videoExists()) return NO;
++        AVURLAsset *asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:VCAM_VIDEO]
++                             options:@{AVURLAssetPreferPreciseDurationAndTimingKey: @NO}];
++        NSArray *tracks = [asset tracksWithMediaType:AVMediaTypeVideo];
++        if (tracks.count == 0) return NO;
++        NSError *err = nil;
++        AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&err];
++        if (!reader || err) return NO;
++        NSDictionary *s = @{(NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA)};
++        AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:tracks[0] outputSettings:s];
++        output.alwaysCopiesSampleData = YES;
++        if (![reader canAddOutput:output]) return NO;
++        [reader addOutput:output];
++        if (endSec > startSec) {
++            reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds(startSec, 600),
++                                               CMTimeMakeWithSeconds(endSec - startSec, 600));
++        }
++        if (![reader startReading]) return NO;
++        *rdr = reader; *out = output; return YES;
++    } @catch (NSException *e) { return NO; }
++}
++
++// [PATCH-v34] 动作引擎/读取器状态重置 (动作切换/停止时调用)
++static void vcam_resetActionEngine(void) {
++    [gLockA lock];
++    if (gReaderA) { [gReaderA cancelReading]; gReaderA = nil; gOutputA = nil; }
++    if (gActionHold) { CVPixelBufferRelease(gActionHold); gActionHold = NULL; }
++    gPausedFrame = nil;
++    gActionActive = 0;
++    gActionNextPos = 0;
++    gRepeatAcc = 0;
++    [gLockA unlock];
++}
++
++static void vcam_applyActionSelection(void); // 前向声明 (reloadActionsIfNeeded 需要)
++
++// [PATCH-v34] actions.json 变更检测重载 (mtime 比对, 与 UI 进程 0.3s 节流写盘配合)
++static void vcam_reloadActionsIfNeeded(void) {
++    @try {
++        NSFileManager *fm = [NSFileManager defaultManager];
++        NSDictionary *attr = [fm attributesOfItemAtPath:VCAM_ACTIONS error:nil];
++        uint64_t mt = attr ? (uint64_t)([attr[NSFileModificationDate] timeIntervalSince1970] * 1000.0) : 0;
++        if (mt == gActionCfgMtime) return;
++        gActionCfgMtime = mt;
++        NSData *data = [NSData dataWithContentsOfFile:VCAM_ACTIONS];
++        id obj = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
++        NSArray *acts = [obj isKindOfClass:NSDictionary.class] ? ((NSDictionary *)obj)[@"actions"] : nil;
++        gActionsCfg = [acts isKindOfClass:NSArray.class] ? acts : @[];
++        if (gActionID[0]) vcam_applyActionSelection();
++    } @catch (NSException *e) {}
++}
++
++// [PATCH-v34] 按 id 查动作配置
++static NSDictionary *vcam_actionByID(const char *aid) {
++    if (!aid || !aid[0] || !gActionsCfg) return nil;
++    for (NSDictionary *d in gActionsCfg) {
++        if (![d isKindOfClass:NSDictionary.class]) continue;
++        NSString *ident = d[@"id"];
++        if ([ident isKindOfClass:NSString.class] && [ident isEqualToString:[NSString stringWithUTF8String:aid]]) return d;
++    }
++    return nil;
++}
++
++// [PATCH-v34] 按当前 gActionID 解析并激活区间模式; 无效 ID → 回退普通模式
++static void vcam_applyActionSelection(void) {
++    vcam_resetActionEngine();
++    if (!gActionID[0]) return;
++    NSDictionary *a = vcam_actionByID(gActionID);
++    if (!a) { gActionID[0] = 0; return; }
++    gActionStart = [a[@"start"] isKindOfClass:NSNumber.class] ? [a[@"start"] doubleValue] : 0;
++    gActionEnd   = [a[@"end"]   isKindOfClass:NSNumber.class] ? [a[@"end"]   doubleValue] : 0;
++    if (gActionEnd <= gActionStart) { gActionID[0] = 0; return; }
++    gActionLoop = [a[@"loop"] boolValue] ? 1 : 0;
++    gActionSpeed = [a[@"speed"] isKindOfClass:NSNumber.class] ? [a[@"speed"] floatValue] : 1.0f;
++    if (gActionSpeed < 0.1f) gActionSpeed = 1.0f;
++    if (gActionSpeed > 4.0f) gActionSpeed = 4.0f;
++    gActionFrameDur = 1.0 / 30.0;
++    gActionNextPos = gActionStart;
++    gActionActive = 1;
++    vcam_log2("action: %s [%.2f-%.2f] loop=%d speed=%.2f", gActionID, gActionStart, gActionEnd, gActionLoop, gActionSpeed);
++}
++
++// 读下一帧 (v34 动作模式: 区间/循环/变速; 普通模式: EOF 自动重开 = 循环播放)
++// 调用方负责 CVPixelBufferRelease; 返回的 buffer 可能同时被引擎持有 (内部 retained)
++static CVPixelBufferRef vcam_readVideoFrame(void) {
++    if (!gLockA) return NULL;
++    [gLockA lock];
++    @try {
++        if (gActionActive) {
++            // ---- v34 动作区间模式 ----
++            if (!gReaderA || gReaderA.status != AVAssetReaderStatusReading) {
++                if (!vcam_openReaderForRange(&gReaderA, &gOutputA, gActionStart, gActionEnd)) {
++                    [gLockA unlock]; return NULL;
++                }
++                gActionNextPos = gActionStart;
++                gRepeatAcc = 0;
++            }
++            for (;;) {
++                if (gRepeatAcc >= 1.0 && gActionHold) {  // 慢放 (speed<1): 复用上一帧
++                    gRepeatAcc -= 1.0;
++                    CVPixelBufferRef h = gActionHold;
++                    CVPixelBufferRetain(h);
++                    [gLockA unlock]; return h;
++                }
++                CMSampleBufferRef sb = [gOutputA copyNextSampleBuffer];
++                if (!sb) {
++                    if (gActionLoop) {  // 区间循环: 重开读取器
++                        if (!vcam_openReaderForRange(&gReaderA, &gOutputA, gActionStart, gActionEnd)) {
++                            [gLockA unlock]; return NULL;
++                        }
++                        gActionNextPos = gActionStart;
++                        gRepeatAcc = 0;
++                        continue;
++                    }
++                    [gLockA unlock];  // 无循环: 定格在区间尾帧
++                    if (gActionHold) { CVPixelBufferRef h = gActionHold; CVPixelBufferRetain(h); return h; }
++                    return NULL;
++                }
++                double pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb));
++                double sdur = CMTimeGetSeconds(CMSampleBufferGetDuration(sb));
++                CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
++                CFRelease(sb);
++                if (pts > gActionEnd + 0.002) {
++                    if (gActionLoop) {
++                        if (!vcam_openReaderForRange(&gReaderA, &gOutputA, gActionStart, gActionEnd)) {
++                            [gLockA unlock]; return NULL;
++                        }
++                        gActionNextPos = gActionStart;
++                        gRepeatAcc = 0;
++                        continue;
++                    }
++                    [gLockA unlock];
++                    if (gActionHold) { CVPixelBufferRef h = gActionHold; CVPixelBufferRetain(h); return h; }
++                    return NULL;
++                }
++                if (pts < gActionStart - 0.002) continue;  // 读取器容差外帧丢弃
++                if (gActionSpeed >= 1.0f && pts < gActionNextPos - 0.001) continue;  // 快放: 跳帧
++                if (gActionHold) CVPixelBufferRelease(gActionHold);  // 帧复用区换新
++                gActionHold = (CVPixelBufferRef)pb;
++                CVPixelBufferRetain(gActionHold);
++                if (sdur > 0) gActionFrameDur = sdur;
++                if (gActionSpeed >= 1.0f) {
++                    gActionNextPos = pts + gActionFrameDur / gActionSpeed;
++                    if (gActionNextPos > gActionEnd) gActionNextPos = gActionEnd;
++                } else {
++                    gRepeatAcc += (1.0 / gActionSpeed - 1.0);
++                }
++                [gLockA unlock];
++                return (CVPixelBufferRef)pb;
++            }
++        }
++        if (!gReaderA || gReaderA.status != AVAssetReaderStatusReading) {
++            if (!vcam_openReader(&gReaderA, &gOutputA)) { [gLockA unlock]; return NULL; }
++        }
++        CMSampleBufferRef sb = [gOutputA copyNextSampleBuffer];
++        if (!sb) {
++            if (vcam_openReader(&gReaderA, &gOutputA)) sb = [gOutputA copyNextSampleBuffer];
++            if (!sb) { [gLockA unlock]; return NULL; }
++        }
++        CVImageBufferRef pb = CMSampleBufferGetImageBuffer(sb);
++        if (!pb) { CFRelease(sb); [gLockA unlock]; return NULL; }
++        CVPixelBufferRetain(pb);
++        CFRelease(sb);
++        [gLockA unlock];
++        return (CVPixelBufferRef)pb;
++    } @catch (NSException *e) { [gLockA unlock]; return NULL; }
++}
++
++// 暂停: 固定当前帧
++static CIImage *vcam_getPausedFrame(void) {
++    if (!gVideoPaused) return nil;
++    if (gPausedFrame) return gPausedFrame;
++    CVPixelBufferRef pb = vcam_readVideoFrame();
++    if (!pb) return nil;
++    CIImage *img = [CIImage imageWithCVImageBuffer:pb];
++    CVPixelBufferRelease(pb);
++    if (img) gPausedFrame = img;
++    return img;
++}
++
++// 旋转/翻转 (主源码 vcam_applyVideoTransforms)
++static CIImage *vcam_applyVideoTransforms(CIImage *img) {
++    if (!img) return nil;
++    if (gVideoRotation == 90) {
++        img = [img imageByApplyingOrientation:kCGImagePropertyOrientationRight];
++    } else if (gVideoRotation == 180) {
++        img = [img imageByApplyingOrientation:kCGImagePropertyOrientationDown];
++    } else if (gVideoRotation == 270) {
++        img = [img imageByApplyingOrientation:kCGImagePropertyOrientationLeft];
++    }
++    if (gVideoFlipH) {
++        CGRect ext = img.extent;
++        img = [img imageByApplyingTransform:CGAffineTransformMake(-1, 0, 0, 1, 2 * ext.origin.x + ext.size.width, 0)];
++    }
++    return img;
++}
++
++// 等比适配 + 黑边 (主源码 vcam_aspectFit)
++static CIImage *vcam_aspectFit(CIImage *img, size_t targetW, size_t targetH) {
++    CGRect ext = img.extent;
++    CGFloat srcW = ext.size.width, srcH = ext.size.height;
++    if (srcW <= 0 || srcH <= 0 || targetW == 0 || targetH == 0) return img;
++    if ((size_t)srcW == targetW && (size_t)srcH == targetH) return img;
++    CGFloat sx = (CGFloat)targetW / srcW;
++    CGFloat sy = (CGFloat)targetH / srcH;
++    CGFloat scale = MIN(sx, sy);
++    CGFloat scaledW = srcW * scale;
++    CGFloat scaledH = srcH * scale;
++    img = [img imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
++    CGFloat tx = ((CGFloat)targetW - scaledW) / 2.0 - ext.origin.x * scale;
++    CGFloat ty = ((CGFloat)targetH - scaledH) / 2.0 - ext.origin.y * scale;
++    img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation(tx, ty)];
++    CIImage *bg = [[CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:1]]
++                   imageByCroppingToRect:CGRectMake(0, 0, (CGFloat)targetW, (CGFloat)targetH)];
++    return [img imageByCompositingOverImage:bg];
++}
++
++// 颜色注入: 全屏 RGB+alpha 叠加 (主源码 vcam_applyColorInject 简化版, 无 Vision 人脸检测)
++static CIImage *vcam_applyColorInject(CIImage *img) {
++    if (!gColorInject || !img) return img;
++    if (gInjectR < 0.01 && gInjectG < 0.01 && gInjectB < 0.01) return img;
++    @try {
++        CGRect ext = img.extent;
++        CIColor *overlay = [CIColor colorWithRed:gInjectR green:gInjectG blue:gInjectB alpha:gInjectAlpha];
++        CIImage *colorImg = [[CIImage imageWithColor:overlay] imageByCroppingToRect:ext];
++        CIFilter *blend = [CIFilter filterWithName:@"CISourceOverCompositing"];
++        [blend setValue:colorImg forKey:kCIInputImageKey];
++        [blend setValue:img forKey:kCIInputBackgroundImageKey];
++        CIImage *result = blend.outputImage;
++        return result ?: img;
++    } @catch (NSException *e) { return img; }
++}
++
++// 渲染视频/图片源 → 目标尺寸 BGRA buffer (黑边已合成). 调用方负责 release.
++static CVPixelBufferRef vcam_renderSourceToBGRA(size_t targetW, size_t targetH) {
++    @try {
++        CIImage *src = nil;
++        if (vcam_imageExists()) {
++            NSData *data = [NSData dataWithContentsOfFile:VCAM_IMAGE];
++            if (data && data.length > 0) src = [CIImage imageWithData:data];
++        }
++        if (!src && vcam_videoExists()) {
++            CIImage *paused = vcam_getPausedFrame();
++            if (paused) {
++                src = paused;
++            } else {
++                CVPixelBufferRef pb = vcam_readVideoFrame();
++                if (pb) {
++                    src = [CIImage imageWithCVImageBuffer:pb];
++                    CVPixelBufferRelease(pb);
++                }
++            }
++        }
++        if (!src) return NULL;
++        src = vcam_applyVideoTransforms(src);
++        src = vcam_aspectFit(src, targetW, targetH);
++        src = vcam_applyColorInject(src);
++        CGRect ext = src.extent;
++        if (ext.origin.x != 0 || ext.origin.y != 0) {
++            src = [src imageByApplyingTransform:CGAffineTransformMakeTranslation(-ext.origin.x, -ext.origin.y)];
++        }
++        if (!gCICtx) {
++            gCICtx = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
++        }
++        NSDictionary *pba = @{
++            (NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
++            (NSString *)kCVPixelBufferCGImageCompatibilityKey: @YES,
++            (NSString *)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
++        };
++        CVPixelBufferRef outPB = NULL;
++        CVReturn r = CVPixelBufferCreate(kCFAllocatorDefault, targetW, targetH,
++                                         kCVPixelFormatType_32BGRA,
++                                         (__bridge CFDictionaryRef)pba, &outPB);
++        if (r != kCVReturnSuccess || !outPB) return NULL;
++        [gCICtx render:src toCVPixelBuffer:outPB];
++        CVPixelBufferLockBaseAddress(outPB, kCVPixelBufferLock_ReadOnly);
++        CVPixelBufferUnlockBaseAddress(outPB, kCVPixelBufferLock_ReadOnly);
++        return outPB;
++    } @catch (NSException *e) { return NULL; }
++}
++
++// ===== [PATCH-v33] 跨进程 controls 文件 =====
++static void vcam_applyControls(NSString *content) {
++    if (!content || content.length < 3) return;
++    NSArray *parts = [content componentsSeparatedByString:@","];
++    // 0=on,1=rot,2=flip,3=pause,4=colorInject,5=R,6=G,7=B,8=alpha,9=replace,10=patternColor
++    // 11=actionID,12=stop (v34: VCActionSystem 分段动作)
++    if (parts.count < 9) return;
++    int newRot = [parts[1] intValue];
++    int newFlip = [parts[2] intValue];
++    BOOL newPause = [parts[3] intValue] != 0;
++    if (newPause != gVideoPaused) {
++        gPausedFrame = nil;
++    }
++    gVideoRotation = newRot;
++    gVideoFlipH = newFlip;
++    gVideoPaused = newPause;
++    gColorInject = [parts[4] intValue];
++    gInjectR = [parts[5] doubleValue];
++    gInjectG = [parts[6] doubleValue];
++    gInjectB = [parts[7] doubleValue];
++    gInjectAlpha = [parts[8] doubleValue];
++    if (parts.count >= 10) gReplaceEnabled = [parts[9] intValue];
++    if (parts.count >= 11) {
++        uint32_t pc = (uint32_t)strtoul([parts[10] UTF8String], NULL, 0);
++        if (pc != gPatternColor) {
++            gPatternColor = pc;
++            if (s_testPattern) { CVPixelBufferRelease(s_testPattern); s_testPattern = NULL; }
++        }
++    }
++    // [PATCH-v34] 动作选择/停止
++    if (parts.count >= 12) {
++        NSString *newAct = parts[11];
++        BOOL sameID = (gActionID[0] != 0) && [newAct isEqualToString:[NSString stringWithUTF8String:gActionID]];
++        if (!sameID) {
++            strncpy(gActionID, [newAct UTF8String] ? [newAct UTF8String] : "", sizeof(gActionID) - 1);
++            gActionID[sizeof(gActionID) - 1] = 0;
++            vcam_applyActionSelection();
++        }
++    }
++    if (parts.count >= 13 && [parts[12] intValue] != 0) {
++        if (gActionID[0] || gActionActive) { gActionID[0] = 0; vcam_resetActionEngine(); }
++    }
++}
++
++static void vcam_readControls(void) {
++    static NSTimeInterval sLastRead = 0;
++    NSTimeInterval now = CACurrentMediaTime();
++    if (now - sLastRead < 0.3) return;
++    sLastRead = now;
++    @try {
++        vcam_reloadActionsIfNeeded();
++        NSString *content = [NSString stringWithContentsOfFile:VCAM_FLAG encoding:NSUTF8StringEncoding error:nil];
++        if (content) vcam_applyControls(content);
++    } @catch (NSException *e) {}
++}
++
++// UI(SpringBoard) 侧写 controls 文件 (v34: 13 字段)
++static void vcam_writeControls(void) {
++    @try {
++        NSString *line = [NSString stringWithFormat:@"1,%d,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%d,%u,%s,%d",
++            gVideoRotation, gVideoFlipH, gVideoPaused, gColorInject,
++            gInjectR, gInjectG, gInjectB, gInjectAlpha,
++            gReplaceEnabled, (unsigned)gPatternColor,
++            gActionID, gActionStop];
++        [line writeToFile:VCAM_FLAG atomically:YES encoding:NSUTF8StringEncoding error:nil];
++        vcam_log2("controls: %s", [line UTF8String]);
++    } @catch (NSException *e) {}
++}
++
++
++// ============== Replacement IMPs ==============
++
++static BOOL r_isLicenseValid(id self, SEL _cmd) { return YES; }
++static BOOL r_loadPersistedLicense(id self, SEL _cmd) { return YES; }
++static NSString *r_licenseStatusString(id self, SEL _cmd) {
++    return @"已授权 (v15 bypass)";
++}
++static unsigned int r_features(id self, SEL _cmd) { return 0xFFFFFFFFU; }
++static long long r_expiryUnix(id self, SEL _cmd) { return 4070908800LL; }  // 2099
++
++static BOOL r_VC_isEnabled(id self, SEL _cmd) { return YES; }
++__attribute__((unused))
++static BOOL r_VC_hasReplacementFrame(id self, SEL _cmd) { return YES; }
++// v20: bootstrap LVP decoding + VT transfer 替换
++// 之前 v19 hasValidFrame=NO 因为 vcam125 内部从来没调 setVideoSize/startDecodingThread
++// (那条 trigger 链在我们 short-circuit renderReplacement 时断了). 自己 bootstrap.
++static VTPixelTransferSessionRef s_xferSession = NULL;
++static int s_lvpBootstrapped = 0;
++
++__attribute__((unused))
++static void v22_bootstrapLVP(CVPixelBufferRef dst) {
++    if (s_lvpBootstrapped) return;
++    Class lvpCls = objc_getClass("LocalVideoPlayer");
++    if (!lvpCls) return;
++    id lvp = ((id (*)(Class, SEL))objc_msgSend)(lvpCls, sel_registerName("sharedInstance"));
++    if (!lvp) return;
++    size_t w = CVPixelBufferGetWidth(dst);
++    size_t h = CVPixelBufferGetHeight(dst);
++    if (w == 0 || h == 0) return;
++
++    @try {
++        // v22: 用 KVC 直接写 ivar (避免 ARM64 ABI struct passing 问题)
++        NSNumber *wNum = [NSNumber numberWithUnsignedLong:w];
++        NSNumber *hNum = [NSNumber numberWithUnsignedLong:h];
++        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(
++            lvp, sel_registerName("setValue:forKey:"), wNum, @"_targetWidth");
++        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(
++            lvp, sel_registerName("setValue:forKey:"), hNum, @"_targetHeight");
++
++        // 触发 decode thread + frame timer + 重 load
++        ((void (*)(id, SEL))objc_msgSend)(lvp, sel_registerName("reloadVideo"));
++        ((void (*)(id, SEL, NSInteger))objc_msgSend)(lvp, sel_registerName("startDecodingThreadForGeneration:"), (NSInteger)1);
++        ((void (*)(id, SEL, NSInteger))objc_msgSend)(lvp, sel_registerName("startFrameTimerForGeneration:"), (NSInteger)1);
++        ((void (*)(id, SEL))objc_msgSend)(lvp, sel_registerName("play"));
++
++        NSLog(@"[v22bypass] LVP bootstrap: KVC _targetWidth=%zu _targetHeight=%zu + reload + startDecode + play", w, h);
++        s_lvpBootstrapped = 1;
++    } @catch (NSException *e) {
++        NSLog(@"[v22bypass] LVP bootstrap fail: %@", e);
++    }
++}
++
++// v23: 生成一个纯色 BGRA test pattern, lazy cache. 用来验证 hook+VT transfer 端到端 work.
++static size_t s_testW = 0, s_testH = 0;
++
++static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
++    if (s_testPattern && s_testW == w && s_testH == h) return s_testPattern;
++    if (s_testPattern) { CVPixelBufferRelease(s_testPattern); s_testPattern = NULL; }
++
++    NSDictionary *attrs = @{
++        (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
++        (id)kCVPixelBufferMetalCompatibilityKey: @YES,
++    };
++    CVPixelBufferRef buf = NULL;
++    CVReturn r = CVPixelBufferCreate(kCFAllocatorDefault, w, h,
++                                     kCVPixelFormatType_32BGRA,
++                                     (__bridge CFDictionaryRef)attrs, &buf);
++    if (r != kCVReturnSuccess || !buf) return NULL;
++
++    // Fill with bright red BGRA: B=0, G=0, R=255, A=255 (per pixel: 00 00 FF FF)
++    CVPixelBufferLockBaseAddress(buf, 0);
++    uint8_t *base = (uint8_t *)CVPixelBufferGetBaseAddress(buf);
++    size_t bpr = CVPixelBufferGetBytesPerRow(buf);
++    for (size_t y = 0; y < h; y++) {
++        uint32_t *row = (uint32_t *)(base + y * bpr);
++        for (size_t x = 0; x < w; x++) {
++            // BGRA order: B=00 G=00 R=FF A=FF → little-endian uint32 = 0xFFFF0000
 +            row[x] = gPatternColor;
-         }
-     }
-     CVPixelBufferUnlockBaseAddress(buf, 0);
-@@ -110,6 +135,7 @@ static CVPixelBufferRef v23_getTestPattern(size_t w, size_t h) {
- // 3rd party 路径正常 transfer (看到假画面).
- static void v23_doReplace(CVPixelBufferRef dst) {
-     if (!dst) return;
++        }
++    }
++    CVPixelBufferUnlockBaseAddress(buf, 0);
++    s_testPattern = buf;
++    s_testW = w; s_testH = h;
++    NSLog(@"[v23bypass] created %zux%zu BGRA red test pattern", w, h);
++    return buf;
++}
++
++// v26: 3rd party / 网页 OK (BWNodeOutput.emit, photoFlag=0). Apple Camera 黑 (BWPhotoEncoder, photoFlag=1).
++// 所以 photoFlag=1 路径不 transfer (Apple Camera 显示真画面不黑屏).
++// 3rd party 路径正常 transfer (看到假画面).
++static void v23_doReplace(CVPixelBufferRef dst) {
++    if (!dst) return;
 +    if (!gReplaceEnabled) return; // [PATCH-v32] UI 总开关 OFF: 真画面
-     size_t w = CVPixelBufferGetWidth(dst);
-     size_t h = CVPixelBufferGetHeight(dst);
-     if (w == 0 || h == 0) return;
-@@ -133,7 +159,7 @@ static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _
-     // v26: Apple Camera (flag=1) 路径下 BWPhotoEncoder.render orig 对 modified dst 敏感
-     // → 黑屏. 跳过 transfer 让 Apple Camera 显示真画面 (no crash, no replacement).
-     // 3rd party 应该不会到这里 (它走 renderReplacementToPixelBuffer:, 不带 flag)
--    if (flag) return;
++    vcam_readControls(); // [PATCH-v33] 跨进程同步 (SpringBoard UI -> 替换进程)
++    size_t w = CVPixelBufferGetWidth(dst);
++    size_t h = CVPixelBufferGetHeight(dst);
++    if (w == 0 || h == 0) return;
++
++    if (!s_xferSession) {
++        OSStatus s = VTPixelTransferSessionCreate(kCFAllocatorDefault, &s_xferSession);
++        if (s != noErr) return;
++        VTSessionSetProperty(s_xferSession, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_Trim);
++    }
++
++    // [PATCH-v33] 视频/图片源优先 (渲染器输出已合成黑边, 尺寸=目标, Trim 即可)
++    if (vcam_imageExists() || vcam_videoExists()) {
++        CVPixelBufferRef src = vcam_renderSourceToBGRA(w, h);
++        if (src) {
++            VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++            CVPixelBufferRelease(src);
++            return;
++        }
++    }
++
++    CVPixelBufferRef src = v23_getTestPattern(w, h);
++    if (!src) return;
++
++    VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++}
++
++static void r_VC_renderReplacementToPixelBuffer(id self, SEL _cmd, CVPixelBufferRef pb) {
++    // 3rd party / 网页 path (BWNodeOutput.emit, photoCompensation=0)
++    v23_doReplace(pb);
++}
++static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _cmd, CVPixelBufferRef pb, int flag) {
++    // v26: Apple Camera (flag=1) 路径下 BWPhotoEncoder.render orig 对 modified dst 敏感
++    // → 黑屏. 跳过 transfer 让 Apple Camera 显示真画面 (no crash, no replacement).
++    // 3rd party 应该不会到这里 (它走 renderReplacementToPixelBuffer:, 不带 flag)
 +    if (flag && gCameraPassEnabled) return; // [PATCH-v32] UI 相机真画面开关
-     v23_doReplace(pb);
- }
- 
-@@ -249,6 +275,7 @@ static void applyCHooks(const struct mach_header *mh) {
-     void *gate2_addr = (void *)((uintptr_t)mh + 0xe9f4);
-     @try {
-         MSHookFunction(gate2_addr, (void *)my_gate2, (void **)&orig_gate2);
++    v23_doReplace(pb);
++}
++
++// ============== gate2 hook (vcam125 internal C function @ 0xe9f4) ==============
++
++typedef int (*gate2_fn_t)(void);
++static gate2_fn_t orig_gate2 = NULL;
++static int my_gate2(void) { return 1; }
++
++// ============== SecKeyVerifySignature hook (Apple framework) ==============
++
++typedef Boolean (*SecKeyVerifySig_fn_t)(SecKeyRef, CFStringRef, CFDataRef, CFDataRef, CFErrorRef *);
++static SecKeyVerifySig_fn_t orig_SecKeyVerifySig = NULL;
++static Boolean my_SecKeyVerifySig(SecKeyRef key, CFStringRef alg, CFDataRef signed_data, CFDataRef sig, CFErrorRef *err) {
++    if (err) *err = NULL;
++    return true;
++}
++
++// ============== Helpers ==============
++
++static void swizzle_class(Class cls, SEL sel, IMP newImp, const char *label) {
++    if (!cls) return;
++    Method m = class_getClassMethod(cls, sel);
++    if (m) {
++        method_setImplementation(m, newImp);
++        NSLog(@"[v15bypass] swap +[%s %s]", class_getName(cls), sel_getName(sel));
++    } else {
++        NSLog(@"[v15bypass] +[%s %s] not found", class_getName(cls), sel_getName(sel));
++    }
++}
++static void swizzle_inst(Class cls, SEL sel, IMP newImp, const char *label) {
++    if (!cls) return;
++    Method m = class_getInstanceMethod(cls, sel);
++    if (m) {
++        method_setImplementation(m, newImp);
++        NSLog(@"[v15bypass] swap -[%s %s]", class_getName(cls), sel_getName(sel));
++    } else {
++        NSLog(@"[v15bypass] -[%s %s] not found", class_getName(cls), sel_getName(sel));
++    }
++}
++
++// ============== dyld add_image callback ==============
++
++static int s_didCFunctionHooks = 0;
++static int s_didObjCSwizzle = 0;
++static const struct mach_header *s_vcamMh = NULL;
++
++// vcam125 globals (offsets from dylib base, found via static reverse)
++//   g_isLicenseValid  byte @ 0x63ab4
++//   g_features        uint32 LE @ 0x63ab8
++//   g_runtime_keys    32 bytes @ 0x63abc
++//   g_expiry          x64 @ 0x63980 (large value, unix-ish)
++static void writeVcamIvars(const struct mach_header *mh) {
++    if (!mh) return;
++    uint8_t *base = (uint8_t *)mh;
++    @try {
++        // g_isLicenseValid = 1
++        *(volatile uint8_t *)(base + 0x63ab4) = 1;
++        // g_features = 0xFFFFFFFF
++        *(volatile uint32_t *)(base + 0x63ab8) = 0xFFFFFFFFU;
++        // g_runtime_keys = 32 bytes of 0x42 (consistent pattern, not 0/random)
++        for (int i = 0; i < 32; i++) {
++            ((volatile uint8_t *)(base + 0x63abc))[i] = 0x42;
++        }
++        // g_expiry (uint64 LE) = 2099 unix
++        *(volatile uint64_t *)(base + 0x63980) = 4070908800ULL;
++    } @catch (NSException *e) {
++        NSLog(@"[v17bypass] writeVcamIvars exception: %@", e);
++    }
++}
++
++// Periodically re-write ivars to enforce in case vcam125 internal code clears them
++static void startIvarEnforcer(void) {
++    static int s_started = 0;
++    if (s_started) return;
++    s_started = 1;
++    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0);
++    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
++    dispatch_source_set_timer(timer,
++                              dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
++                              100 * NSEC_PER_MSEC,  // every 100ms
++                              10 * NSEC_PER_MSEC);
++    dispatch_source_set_event_handler(timer, ^{
++        if (s_vcamMh) writeVcamIvars(s_vcamMh);
++    });
++    dispatch_resume(timer);
++    NSLog(@"[v17bypass] ivar enforcer timer started (100ms interval)");
++}
++
++// v30: 回到 v28 的 MSHookFunction passthrough 路线 (v28 实测 video mode work)
++// + 加 BWStillImageScaler passthrough (修 photo mode)
++typedef void (*render_fn_t)(id, SEL, CMSampleBufferRef, id);
++static render_fn_t orig_photoenc_newImp = NULL;
++static const struct mach_header *s_mh_for_render = NULL;
++// vcam125 stash slots:
++//   0x639d0 = BWNodeOutput.emit orig (保持 vcam125 hook → 3rd party 红色)
++//   0x639d8 = BWStillImageScalerNode.render orig (v31 用 method_setImpl 重装)
++//   0x639e0 = BWPhotoEncoderNode.render orig (MSHookFunction passthrough)
++static void my_photoenc_passthrough(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
++    if (!s_mh_for_render) return;
++    render_fn_t orig = *(render_fn_t *)((const uint8_t *)s_mh_for_render + 0x639e0);
++    if (orig) orig(self, _cmd, sb, input);
++}
++
++// Apply C-function hooks (gate2 + SecKey) — these only need vcam125 dylib loaded
++static void applyCHooks(const struct mach_header *mh) {
++    if (s_didCFunctionHooks) return;
++    s_didCFunctionHooks = 1;
++
++    s_mh_for_render = mh;
++
++    // gate2 (vcam125 dylib base + 0xe9f4)
++    void *gate2_addr = (void *)((uintptr_t)mh + 0xe9f4);
++    @try {
++        MSHookFunction(gate2_addr, (void *)my_gate2, (void **)&orig_gate2);
 +        gHookGate2 = 1;
-         NSLog(@"[v27bypass] gate2 @ %p hooked", gate2_addr);
-     } @catch (NSException *e) {
-         NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
-@@ -259,6 +286,7 @@ static void applyCHooks(const struct mach_header *mh) {
-     if (sec_ptr && !orig_SecKeyVerifySig) {
-         @try {
-             MSHookFunction(sec_ptr, (void *)my_SecKeyVerifySig, (void **)&orig_SecKeyVerifySig);
++        NSLog(@"[v27bypass] gate2 @ %p hooked", gate2_addr);
++    } @catch (NSException *e) {
++        NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
++    }
++
++    // SecKeyVerifySignature framework hook
++    void *sec_ptr = dlsym(RTLD_DEFAULT, "SecKeyVerifySignature");
++    if (sec_ptr && !orig_SecKeyVerifySig) {
++        @try {
++            MSHookFunction(sec_ptr, (void *)my_SecKeyVerifySig, (void **)&orig_SecKeyVerifySig);
 +            gHookSecKey = 1;
-             NSLog(@"[v27bypass] SecKeyVerifySignature hooked");
-         } @catch (NSException *e) {
-             NSLog(@"[v27bypass] SecKeyVerifySig hook FAILED: %@", e);
-@@ -271,6 +299,7 @@ static void applyCHooks(const struct mach_header *mh) {
-     void *photoenc_addr = (void *)((uintptr_t)mh + 0xe240);
-     @try {
-         MSHookFunction(photoenc_addr, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
++            NSLog(@"[v27bypass] SecKeyVerifySignature hooked");
++        } @catch (NSException *e) {
++            NSLog(@"[v27bypass] SecKeyVerifySig hook FAILED: %@", e);
++        }
++    }
++
++    // v31: 只 MSHookFunction BWPhotoEncoder (v28 work 的方式)
++    // BWStillImageScaler 0xe234 不能 MSHookFunction — 与 0xe240 间距 12B, trampoline 16B 会重叠崩
++    // 改在 tryObjCSwizzle 延迟 retry 里 method_setImplementation 替换 (vcam125 +load 完成后)
++    void *photoenc_addr = (void *)((uintptr_t)mh + 0xe240);
++    @try {
++        MSHookFunction(photoenc_addr, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
 +        gHookPhotoEnc = 1;
-         NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
-     } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
- }
-@@ -367,4 +396,52 @@ static void v16_init(void) {
-     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
-                    dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
-                    ^{ tryObjCSwizzle(100); });
++        NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
++    } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
++}
++
++// Try ObjC class swizzle — called repeatedly until classes appear
++static void tryObjCSwizzle(int retriesLeft) {
++    if (s_didObjCSwizzle) return;
++    Class lc = objc_getClass("LicenseCore");
++    Class vc = objc_getClass("VCamCore");
++    if (!lc || !vc) {
++        if (retriesLeft <= 0) {
++            NSLog(@"[v16bypass] gave up swizzle: lc=%@ vc=%@ (classes never appeared after 100 retries)",
++                  lc, vc);
++            return;
++        }
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
++                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
++                       ^{ tryObjCSwizzle(retriesLeft - 1); });
++        return;
++    }
++
++    s_didObjCSwizzle = 1;
++    NSLog(@"[v16bypass] *** classes appeared after retry, swizzling now");
++
++    swizzle_class(lc, @selector(isLicenseValid),       (IMP)r_isLicenseValid,       "isLicenseValid");
++    swizzle_class(lc, @selector(loadPersistedLicense), (IMP)r_loadPersistedLicense, "loadPersistedLicense");
++    swizzle_class(lc, @selector(licenseStatusString),  (IMP)r_licenseStatusString,  "licenseStatusString");
++    swizzle_class(lc, @selector(features),             (IMP)r_features,             "features");
++    swizzle_class(lc, @selector(expiryUnix),           (IMP)r_expiryUnix,           "expiryUnix");
++    swizzle_inst(vc, @selector(isEnabled),             (IMP)r_VC_isEnabled,            "VC.isEnabled");
++
++    // v31: 此时 vcam125 +load 已完成 (我们 retry 等 class 出现 = vcam125 init done).
++    // 从 vcam125 stash slot +0x639d8 读 BWStillImageScaler.render Apple orig, 重装回 class.
++    // 不能 MSHookFunction 0xe234 因与 0xe240 trampoline 重叠.
++    if (s_mh_for_render) {
++        @try {
++            IMP stillscale_orig = *(IMP *)((const uint8_t *)s_mh_for_render + 0x639d8);
++            Class scaleCls = objc_getClass("BWStillImageScalerNode");
++            if (scaleCls && stillscale_orig) {
++                Method m = class_getInstanceMethod(scaleCls, sel_registerName("renderSampleBuffer:forInput:"));
++                if (m) {
++                    method_setImplementation(m, stillscale_orig);
++                    NSLog(@"[v31bypass] BWStillImageScalerNode.render restored to Apple orig %p", stillscale_orig);
++                }
++            }
++        } @catch (NSException *e) { NSLog(@"[v31bypass] stillscale restore err: %@", e); }
++    }
++    // 我们替换了 renderReplacement → 强制 emit hook 调我们的 (vcam125 原版崩)
++    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:), (IMP)r_VC_renderReplacementToPixelBuffer, "VC.renderReplPB");
++    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:photoCompensation:), (IMP)r_VC_renderReplacementToPixelBuffer_photoCompensation, "VC.renderReplPB:photo");
++    // v21: 重新加 hasReplacementFrame=YES, 强制 emit hook 调到我们的 renderReplacement
++    // (v18-v20 移除让 emit hook 在 step 6 bail, 我们 hook 永远没机会跑 → chicken-egg
++    // LVP 永远不解码). 现在我们的 renderReplacement 已经替换 vcam125 原版 → 调进来不会崩.
++    swizzle_inst(vc, @selector(hasReplacementFrame), (IMP)r_VC_hasReplacementFrame, "VC.hasReplacementFrame");
++    NSLog(@"[v16bypass] *** ObjC swizzle complete");
++}
++
++static void onImageLoad(const struct mach_header *mh, intptr_t slide) {
++    Dl_info info;
++    if (dladdr((const void *)mh, &info) == 0) return;
++    if (!info.dli_fname) return;
++    if (!strstr(info.dli_fname, "vcameracrack")) return;
++
++    NSLog(@"[v17bypass] *** vcameracrack loaded at %p slide=0x%lx path=%s",
++          mh, (unsigned long)slide, info.dli_fname);
++    s_vcamMh = mh;
++
++    // C-function hooks immediately
++    applyCHooks(mh);
++
++    // Write ivars NOW (before vcam125 +load tries to verify license)
++    writeVcamIvars(mh);
++
++    // Start periodic re-write timer to enforce against vcam125's own clearing
++    startIvarEnforcer();
++
++    // ObjC class hooks deferred via retry
++    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
++        tryObjCSwizzle(100);
++    });
++}
++
++// ============== ctor — register dyld callback ==============
++
++__attribute__((constructor))
++static void v16_init(void) {
++    NSString *proc = [[NSProcessInfo processInfo] processName];
++    NSLog(@"[v16bypass] ctor in process: %@", proc);
++    _dyld_register_func_for_add_image(onImageLoad);
++    NSLog(@"[v16bypass] dyld add_image callback registered");
++
++    // ALSO start an independent retry loop in case dyld callback never sees vcameracrack
++    // (already-loaded edge case — though dyld should fire for already-loaded images)
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
++                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
++                   ^{ tryObjCSwizzle(100); });
 +    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
++    // [PATCH-v33] 视频读取器锁初始化
++    if (!gLockA) gLockA = [NSLock new];
++    vcam_readControls(); // 启动即同步一次 controls
 +}
 +// ===== [PATCH-v32] 接口实现 (VCamBypassUI 调用) =====
 +#ifdef __cplusplus
@@ -125,6 +2427,7 @@ index 9bc858c..90d626b 100644
 +}
 +BOOL vcam_bypass_set_replace(BOOL on) {
 +    gReplaceEnabled = on ? 1 : 0;
++    vcam_writeControls(); // [PATCH-v33] 跨进程同步
 +    vcam_log2("replace=%d", gReplaceEnabled);
 +    return YES;
 +}
@@ -136,11 +2439,79 @@ index 9bc858c..90d626b 100644
 +BOOL vcam_bypass_set_pattern_color(uint32_t c) {
 +    gPatternColor = c;
 +    if (s_testPattern) { CVPixelBufferRelease(s_testPattern); s_testPattern = NULL; }
++    vcam_writeControls(); // [PATCH-v33] 跨进程同步
 +    vcam_log2("pattern=0x%08X", (unsigned)c);
 +    return YES;
 +}
 +int vcam_bypass_get_replace(void)     { return gReplaceEnabled; }
 +int vcam_bypass_get_camera_pass(void) { return gCameraPassEnabled; }
++// ===== [PATCH-v33] 视频/图片功能接口 =====
++BOOL vcam_bypass_set_pause(BOOL on) {
++    gVideoPaused = on ? 1 : 0;
++    if (gVideoPaused) gPausedFrame = nil;
++    vcam_writeControls();
++    vcam_log2("pause=%d", gVideoPaused);
++    return YES;
++}
++int vcam_bypass_get_pause(void) { return gVideoPaused; }
++BOOL vcam_bypass_toggle_rotation(void) {
++    gVideoRotation = (gVideoRotation + 90) % 360;
++    vcam_writeControls();
++    vcam_log2("rotation=%d", gVideoRotation);
++    return YES;
++}
++int vcam_bypass_get_rotation(void) { return gVideoRotation; }
++BOOL vcam_bypass_set_color_inject(int on, double r, double g, double b, double a) {
++    gColorInject = on ? 1 : 0;
++    gInjectR = r; gInjectG = g; gInjectB = b; gInjectAlpha = a;
++    vcam_writeControls();
++    vcam_log2("inject=%d %.2f,%.2f,%.2f a=%.2f", gColorInject, r, g, b, a);
++    return YES;
++}
++int vcam_bypass_get_color_inject(double *r, double *g, double *b, double *a) {
++    if (r) *r = gInjectR;
++    if (g) *g = gInjectG;
++    if (b) *b = gInjectB;
++    if (a) *a = gInjectAlpha;
++    return gColorInject;
++}
++// 当前激活源: 0=图案 1=视频 2=图片
++int vcam_bypass_source_mode(void) {
++    if (vcam_videoExists()) return 1;
++    if (vcam_imageExists()) return 2;
++    return 0;
++}
++// 信号源文件信息: "video|size|image|size" (0 表示无)
++NSString *vcam_bypass_source_info(void) {
++    NSFileManager *fm = [NSFileManager defaultManager];
++    unsigned long long v = 0, i = 0;
++    NSDictionary *va = [fm attributesOfItemAtPath:VCAM_VIDEO error:nil];
++    NSDictionary *ia = [fm attributesOfItemAtPath:VCAM_IMAGE error:nil];
++    if (va) v = [va[NSFileSize] unsignedLongLongValue];
++    if (ia) i = [ia[NSFileSize] unsignedLongLongValue];
++    return [NSString stringWithFormat:@"%llu|%llu", v, i];
++}
++// ===== [PATCH-v34] VCActionSystem 动作接口 =====
++// 选择动作 (UI 写入 actionID + stop=0); 空 ID = 仅清除选择
++BOOL vcam_bypass_set_action(const char *actionID) {
++    gActionID[0] = 0;
++    if (actionID) strncpy(gActionID, actionID, sizeof(gActionID) - 1);
++    gActionID[sizeof(gActionID) - 1] = 0;
++    gActionStop = 0;
++    vcam_writeControls();
++    vcam_log2("set_action=%s", gActionID);
++    return YES;
++}
++// 停止动作 (写入 stop=1, 引擎读到即复位; 不重置播放位置)
++void vcam_bypass_action_stop(void) {
++    gActionID[0] = 0;
++    gActionStop = 1;
++    vcam_writeControls();
++    vcam_log2("action_stop");
++}
++// 当前生效动作 id (引擎可能因配置无效自动清除)
++const char *vcam_bypass_active_action(void) { return gActionID; }
++
 +void vcam_bypass_retry(void) {
 +    vcam_log2("retry swizzle requested");
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
@@ -156,6 +2527,6 @@ index 9bc858c..90d626b 100644
 +    return m;
 +}
 +#ifdef __cplusplus
- }
++}
 +#endif
 \ No newline at end of file

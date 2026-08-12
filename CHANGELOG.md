@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v1.1.6 (2026-08-12)
+
+### 功能
+- feat: 集成 VCActionSystem 分段动作模块 (v34, 按构建图纸/UI图纸/总UI图纸确认后实施):
+  独立模块接入 — 动作配置 JSON 与参考工程同 schema `{version,videoName,videoSize,duration,actions[]}`,
+  落盘 `/var/jb/var/mobile/Library/vcamplus/actions.json`。
+  - 引擎 (Tweak.xm, 替换进程): controls 协议由 11 字段扩为 13 字段
+    `1,rot,flip,pause,colorInject,R,G,B,alpha,replace,patternColor,actionID,stop`;
+    actions.json mtime 变更检测重载 (0.3s 节流与 UI 写盘配合);
+    AVAssetReader timeRange(start..end) 区间读取 = VCActionPlayer 分段播放移植
+    (generation 复位语义由动作切换重建读取器等价实现), 区间循环 (EOF/越界重开读取器),
+    速度 0.5–2x (s>=1 虚拟时间轴跳帧, s<1 帧复用累加);
+    无效配置自动回退普通模式, stop/清空 actionID 恢复且不重置播放位置;
+    vcam_bypass_set_action/vcam_bypass_action_stop/vcam_bypass_active_action 接口。
+  - UI (VCamBypassUI.m, SpringBoard): 面板新增第 3 页签「动作」 — 模式/状态芯片、
+    信息行 (视频时长 · 动作数 · 当前动作名)、动作列表 (播放中 cyan 高亮 + ▶ 前缀
+    「名称 开始–结束 · 循环/一次 · 速度」)、「＋ 添加动作」「■ 停止动作」、长按行
+    编辑/删除、添加/编辑表单 (名称/开始秒/结束秒/循环 0/1/速度 0.5-2x, 客户端+引擎
+    双侧校验)、选新视频自动清空动作配置 (videoSize 变更检测)。
+- docs: 新增 VCAction-INTEGRATION.md (接口分析/映射表/13 字段协议/交付层次) 与
+  FEATURE-MAP.md (v32→v34 功能地图); 生成 VCamPro-v34 构建图纸/UI图纸/总UI图纸 PNG。
+
 ## v1.1.5 (2026-08-12)
 
 ### 功能
