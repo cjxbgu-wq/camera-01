@@ -1,5 +1,5 @@
 //
-//  VCamBypassUI.h — vcam125 License Bypass 控制面板 (v32 UI 模块)
+//  VCamBypassUI.h — VCam Pro Bypass 控制面板 (v32 UI 模块)
 //  独立模块: 悬浮球 + 菜单面板 + 音量键入口
 //  Tweak.xm 零修改, 本模块只调用补丁暴露的 6 个接口
 //

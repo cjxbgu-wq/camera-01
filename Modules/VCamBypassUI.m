@@ -1,5 +1,5 @@
 //
-//  VCamBypassUI.m — vcam125 License Bypass UI (v32)
+//  VCamBypassUI.m — VCam Pro Bypass UI (v32)
 //  仅 SpringBoard 进程加载; 其余进程 no-op
 //
 #import "VCamBypassUI.h"
@@ -127,7 +127,7 @@ static UIButton *vcActionBtn(UIView *host, CGFloat y, NSString *title, id target
     self.view.layer.borderColor = VCB_LINE.CGColor;
     self.view.layer.borderWidth = 1;
 
-    [self.view addSubview:vcLabel(CGRectMake(16, 10, 200, 30), @"vcam125 Bypass", VCB_TXT, 17, YES)];
+    [self.view addSubview:vcLabel(CGRectMake(16, 10, 200, 30), @"VCam Pro Bypass", VCB_TXT, 17, YES)];
     UIView *dot = [[UIView alloc] initWithFrame:CGRectMake(16, 50, 10, 10)];
     dot.layer.cornerRadius = 5; dot.backgroundColor = vcStateColor();
     [self.view addSubview:dot];
@@ -151,7 +151,7 @@ static UIButton *vcActionBtn(UIView *host, CGFloat y, NSString *title, id target
 - (void)onHide    { vcHideBall(); vcHideMenu(); }
 - (void)onExportLog {
     NSString *log = vcam_bypass_logs() ?: @"";
-    NSString *path = @"/var/jb/var/mobile/Library/vcam125-bypass.log";
+    NSString *path = @"/var/jb/var/mobile/Library/vcampro-bypass.log";
     [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"日志已导出"
         message:path preferredStyle:UIAlertControllerStyleAlert];

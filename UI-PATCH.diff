@@ -1,21 +1,26 @@
 diff --git a/Makefile b/Makefile
-index 2872389..76193ad 100644
+index 2872389..8a86033 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -7,9 +7,9 @@ include $(THEOS)/makefiles/common.mk
+@@ -5,11 +5,11 @@ THEOS_PACKAGE_SCHEME = rootless
  
- TWEAK_NAME = aaa-vcam125-bypass
+ include $(THEOS)/makefiles/common.mk
+ 
+-TWEAK_NAME = aaa-vcam125-bypass
++TWEAK_NAME = vcampro-bypass
  
 -aaa-vcam125-bypass_FILES      = Tweak.xm
-+aaa-vcam125-bypass_FILES      = Tweak.xm Modules/VCamBypassUI.m
- aaa-vcam125-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
+-aaa-vcam125-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
 -aaa-vcam125-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox
-+aaa-vcam125-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox UIKit QuartzCore
- aaa-vcam125-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
+-aaa-vcam125-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
++vcampro-bypass_FILES      = Tweak.xm Modules/VCamBypassUI.m
++vcampro-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
++vcampro-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox UIKit QuartzCore
++vcampro-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
  
  include $(THEOS_MAKE_PATH)/tweak.mk
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..2e4771b 100644
+index 9bc858c..90d626b 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
 @@ -16,6 +16,31 @@
@@ -38,7 +43,7 @@ index 9bc858c..2e4771b 100644
 +static void vcam_log2(const char *fmt, ...) {
 +    char tmp[192]; va_list ap;
 +    va_start(ap, fmt); vsnprintf(tmp, sizeof(tmp), fmt, ap); va_end(ap);
-+    NSLog(@"[vcam125bypass] %s", tmp);
++    NSLog(@"[vcampro] %s", tmp);
 +    snprintf(gLogBuf[gLogHead % 64], sizeof(gLogBuf[0]), "[v32] %s", tmp);
 +    gLogHead++;
 +    if (gLogCount < 64) gLogCount++;

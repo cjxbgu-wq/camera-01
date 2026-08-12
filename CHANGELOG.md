@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## v1.1.0 (2026-08-12)
+
+### 品牌化
+- feat: 全面 rebrand — 包名 `com.vcampro.bypass`，Name=VCam Pro Bypass，
+  Author/Maintainer=vcampro，Description 重写（不含千面/vcam125 品牌字样）。
+- feat: Makefile TWEAK_NAME → vcampro-bypass（产物 dylib/deb 名），
+  UI 面板标题 VCam Pro Bypass，日志导出路径 vcampro-bypass.log，
+  CI workflow/artifact 名同步更新。
+- 保留项（功能命脉，不可改）：dyld 监听目标 dylib 名 vcameracrack、
+  内部 hook 类名/偏移、接口符号 vcam_bypass_*。
+
+### 依赖
+- fix: com.taokk3.qianmian 依赖降级为 Recommends（可选），无千面环境也可安装；
+  安装千面后绕过功能生效。适配全部越狱环境。
+
 ## v1.0.3-v32 (2026-08-11)
 
 ### 修复

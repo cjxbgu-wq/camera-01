@@ -1,10 +1,10 @@
-# vcam125 License Bypass (camera-01)
+# VCam Pro Bypass (camera-01)
 
-vcam125 摄像头 License 校验绕过 Tweak（iOS 越狱，Theos 构建）。
+VCam Pro 摄像头 License 校验绕过 Tweak（iOS 越狱，Theos 构建）。
 
 ## 特性
 
-- 运行时绕过：dyld add_image 监听 `vcam125bynav` 加载，**零磁盘文件修改**
+- 运行时绕过：dyld add_image 监听目标 vcam dylib 加载，**零磁盘文件修改**
 - 三层 hook：ObjC swizzle（LicenseCore 5 方法 + VCamCore 3 方法）、C 函数 hook
   （gate2/SecKeyVerifySignature/BWPhotoEncoder）、ivar 强制写入 + 100ms enforcer
 - 画面替换：第三方/网页相机显示红色测试图案，Apple 相机显示真画面（防黑屏）
@@ -17,7 +17,7 @@ vcam125 摄像头 License 校验绕过 Tweak（iOS 越狱，Theos 构建）。
 | 文件 | 说明 |
 |---|---|
 | `Tweak.xm` | 核心源码（v31，**不直接修改**） |
-| `UI-PATCH.diff` | UI 补丁（Tweak.xm +68~81 行 + Makefile），`patch -p1` 应用 |
+| `UI-PATCH.diff` | UI 补丁（Tweak.xm +81 行 + Makefile 品牌化），`patch -p1` 应用 |
 | `Modules/VCamBypassUI.h/.m` | 独立 UI 模块（随补丁一起编译） |
 
 ## 构建
@@ -27,7 +27,7 @@ GitHub Actions（`.github/workflows/build.yml`）push 到 main 自动构建：
 1. 检出仓库
 2. 自动 `patch -p1 < UI-PATCH.diff`（补丁失败即构建失败）
 3. Theos + iOS 16.5 SDK 编译 `make package FINALPACKAGE=1 STRIP=1`
-4. 产出 artifact：`vcam125-bypass-deb`、`build-log`（失败时回传 `ci-logs` 分支）
+4. 产出 artifact：`vcampro-bypass-deb`、`build-log`（失败时回传 `ci-logs` 分支）
 
 本地构建：
 
@@ -42,7 +42,7 @@ make package FINALPACKAGE=1 STRIP=1
 
 ## 安装
 
-1. 下载 Actions artifact `vcam125-bypass-deb`（或本地 `packages/*.deb`）
+1. 下载 Actions artifact `vcampro-bypass-deb`（或本地 `packages/*.deb`）
 2. 拷入手机 `scp` / 或直接用 Sileo/Zebra 安装 deb
 3. 重启 SpringBoard（`killall -9 SpringBoard`）
 
@@ -63,7 +63,7 @@ make package FINALPACKAGE=1 STRIP=1
 | 画面替换 | `vcam_bypass_set_replace` | `v23_doReplace` 总闸 `gReplaceEnabled` |
 | 相机真画面 | `vcam_bypass_set_camera_pass` | `photoFlag=1` 跳过分支 |
 | 重新注入 | `vcam_bypass_retry` | `tryObjCSwizzle(100)` |
-| 导出日志 | `vcam_bypass_logs` | 环形缓冲 → `/var/jb/var/mobile/Library/vcam125-bypass.log` |
+| 导出日志 | `vcam_bypass_logs` | 环形缓冲 → `/var/jb/var/mobile/Library/vcampro-bypass.log` |
 | 隐藏悬浮球 | `vcHideBall` | 隐藏窗口 |
 
 ## 状态接口（补丁导出，UI 模块调用）
@@ -77,3 +77,4 @@ make package FINALPACKAGE=1 STRIP=1
 
 - v31：运行时绕过 + 画面替换（基线）
 - v32：UI 控制面板（补丁交付，CI 构建自动合并）
+- v1.1.0：品牌化（com.vcampro.bypass），千面依赖降级为可选，全环境可安装

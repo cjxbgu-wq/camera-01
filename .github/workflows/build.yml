@@ -1,4 +1,4 @@
-name: Build vcam125 Bypass
+name: Build VCam Pro Bypass
 
 on:
   push:
@@ -65,6 +65,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: vcam125-bypass-deb
+          name: vcampro-bypass-deb
           path: packages/*.deb
           retention-days: 30
