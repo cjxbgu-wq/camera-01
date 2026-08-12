@@ -6,6 +6,8 @@
 - fix: TWEAK_NAME 品牌化后 plist 未同步改名 — Theos 找不到
   vcampro-bypass.plist 导致 make package 失败。已重命名（注入过滤不变）。
 - fix: CI 日志回传步骤加固（[skip ci] 防触发构建、GIT_TERMINAL_PROMPT=0）。
+- fix: workflow 显式 permissions: contents: write — 仓库默认只读,
+  github-actions[bot] push 回传被 403 拒绝。
 
 ## v1.1.0 (2026-08-12)
 
