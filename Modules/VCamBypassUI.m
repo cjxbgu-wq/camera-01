@@ -174,29 +174,33 @@ static BOOL vcReplaceOn(void)     { return vcam_bypass_get_replace() != 0; }
 static BOOL vcCameraPassOn(void)  { return vcam_bypass_get_camera_pass() != 0; }
 
 void vcShowBall(void) {
-    if (sBallWin) { sBallWin.hidden = NO; return; }
-    sBallWin = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 64, 64)];
-    sBallWin.windowLevel = UIWindowLevelStatusBar + 100;
-    sBallWin.backgroundColor = [UIColor clearColor];
-    sBallWin.rootViewController = [UIViewController new];
-    sBallWin.userInteractionEnabled = YES;
-    VCBall *b = [[VCBall alloc] initWithFrame:sBallWin.bounds];
-    [sBallWin addSubview:b];
-    CGFloat w = [UIScreen mainScreen].bounds.size.width;
-    CGFloat h = [UIScreen mainScreen].bounds.size.height;
-    sBallWin.center = CGPointMake(w - 50, h * 0.35);
-    sBallWin.hidden = NO;
+    @try {
+        if (sBallWin) { sBallWin.hidden = NO; return; }
+        sBallWin = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 64, 64)];
+        sBallWin.windowLevel = UIWindowLevelStatusBar + 100;
+        sBallWin.backgroundColor = [UIColor clearColor];
+        sBallWin.rootViewController = [UIViewController new];
+        sBallWin.userInteractionEnabled = YES;
+        VCBall *b = [[VCBall alloc] initWithFrame:sBallWin.bounds];
+        [sBallWin addSubview:b];
+        CGFloat w = [UIScreen mainScreen].bounds.size.width;
+        CGFloat h = [UIScreen mainScreen].bounds.size.height;
+        sBallWin.center = CGPointMake(w - 50, h * 0.35);
+        sBallWin.hidden = NO;
+    } @catch (NSException *e) { NSLog(@"[vcbUI] showBall fail: %@", e); }
 }
 
 void vcShowMenu(void) {
-    if (sMenuWin) { sMenuWin.hidden = NO; return; }
-    sMenuWin = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 300, 340)];
-    sMenuWin.windowLevel = UIWindowLevelStatusBar + 101;
-    sMenuWin.backgroundColor = [UIColor clearColor];
-    sMenuWin.rootViewController = [VCMenuVC new];
-    CGRect sb = [UIScreen mainScreen].bounds;
-    sMenuWin.center = CGPointMake(CGRectGetMidX(sb), CGRectGetMidY(sb));
-    sMenuWin.hidden = NO;
+    @try {
+        if (sMenuWin) { sMenuWin.hidden = NO; return; }
+        sMenuWin = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 300, 340)];
+        sMenuWin.windowLevel = UIWindowLevelStatusBar + 101;
+        sMenuWin.backgroundColor = [UIColor clearColor];
+        sMenuWin.rootViewController = [VCMenuVC new];
+        CGRect sb = [UIScreen mainScreen].bounds;
+        sMenuWin.center = CGPointMake(CGRectGetMidX(sb), CGRectGetMidY(sb));
+        sMenuWin.hidden = NO;
+    } @catch (NSException *e) { NSLog(@"[vcbUI] showMenu fail: %@", e); }
 }
 void vcHideMenu(void) { if (sMenuWin) sMenuWin.hidden = YES; }
 void vcHideBall(void) { if (sBallWin) sBallWin.hidden = YES; }
@@ -205,33 +209,58 @@ void vcToggleMenu(void) {
 }
 
 static void vcVolumeInstall(void) {
-    Class cls = NSClassFromString(@"SBVolumeControl");
-    if (!cls) return;
-    Method up = class_getInstanceMethod(cls, @selector(increaseVolume));
-    Method dn = class_getInstanceMethod(cls, @selector(decreaseVolume));
-    if (!up || !dn) return;
-    IMP oup = method_getImplementation(up), odn = method_getImplementation(dn);
-    method_setImplementation(up, imp_implementationWithBlock(^(id self) {
-        ((void (*)(id, SEL))oup)(self, @selector(increaseVolume));
-        NSTimeInterval now = CACurrentMediaTime();
-        if (sDnT > 0 && (now - sDnT) < 1.5) { sUpT = sDnT = 0;
-            dispatch_async(dispatch_get_main_queue(), ^{ vcShowBall(); }); }
-        else sUpT = now;
-    }));
-    method_setImplementation(dn, imp_implementationWithBlock(^(id self) {
-        ((void (*)(id, SEL))odn)(self, @selector(decreaseVolume));
-        NSTimeInterval now = CACurrentMediaTime();
-        if (sUpT > 0 && (now - sUpT) < 1.5) { sUpT = sDnT = 0;
-            dispatch_async(dispatch_get_main_queue(), ^{ vcToggleMenu(); }); }
-        else sDnT = now;
-    }));
+    @try {
+        Class cls = NSClassFromString(@"SBVolumeControl");
+        if (!cls) return;
+        Method up = class_getInstanceMethod(cls, @selector(increaseVolume));
+        Method dn = class_getInstanceMethod(cls, @selector(decreaseVolume));
+        if (!up || !dn) return;
+        // 签名校验: 仅替换 v@: (void 无参) 实现, 避免调用约定错位
+        const char *tup = method_getTypeEncoding(up);
+        const char *tdn = method_getTypeEncoding(dn);
+        if (!tup || !tdn || strcmp(tup, "v@:") != 0 || strcmp(tdn, "v@:") != 0) {
+            NSLog(@"[vcbUI] volume sig mismatch up=%s dn=%s, skip", tup ?: "(null)", tdn ?: "(null)");
+            return;
+        }
+        IMP oup = method_getImplementation(up), odn = method_getImplementation(dn);
+        method_setImplementation(up, imp_implementationWithBlock(^(id self) {
+            @try {
+                ((void (*)(id, SEL))oup)(self, @selector(increaseVolume));
+            } @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
+            NSTimeInterval now = CACurrentMediaTime();
+            if (sDnT > 0 && (now - sDnT) < 1.5) { sUpT = sDnT = 0;
+                dispatch_async(dispatch_get_main_queue(), ^{ vcShowBall(); }); }
+            else sUpT = now;
+        }));
+        method_setImplementation(dn, imp_implementationWithBlock(^(id self) {
+            @try {
+                ((void (*)(id, SEL))odn)(self, @selector(decreaseVolume));
+            } @catch (NSException *e) { NSLog(@"[vcbUI] dn orig fail: %@", e); }
+            NSTimeInterval now = CACurrentMediaTime();
+            if (sUpT > 0 && (now - sUpT) < 1.5) { sUpT = sDnT = 0;
+                dispatch_async(dispatch_get_main_queue(), ^{ vcToggleMenu(); }); }
+            else sDnT = now;
+        }));
+    } @catch (NSException *e) {
+        NSLog(@"[vcbUI] volume install fail: %@", e);
+    }
 }
 
 void vcap_ui_mount(void) {
-    if (sInstalled) return;
-    sInstalled = YES;
-    NSString *proc = [[NSProcessInfo processInfo] processName];
-    if (![proc isEqualToString:@"SpringBoard"]) return; // mediaserverd: no-op
-    vcVolumeInstall();
-    NSLog(@"[vcbUI] volume entry installed in %@", proc);
+    @try {
+        if (sInstalled) return;
+        sInstalled = YES;
+        NSString *proc = [[NSProcessInfo processInfo] processName];
+        if (![proc isEqualToString:@"SpringBoard"]) return; // mediaserverd: no-op
+        // 延迟到主线程 + SpringBoard 启动稳定后, 避开 ctor 早期注入时序
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{
+            @try { vcVolumeInstall(); } @catch (NSException *e) {
+                NSLog(@"[vcbUI] volume install delayed fail: %@", e);
+            }
+            NSLog(@"[vcbUI] volume entry installed in SpringBoard");
+        });
+    } @catch (NSException *e) {
+        NSLog(@"[vcbUI] mount fail: %@", e);
+    }
 }
