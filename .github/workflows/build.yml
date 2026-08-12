@@ -17,8 +17,8 @@ jobs:
 
       - name: 应用 UI 补丁 (源码不动, 增量合并)
         run: |
-          patch -p1 < UI-PATCH.diff
-          shasum Tweak.xm Makefile Modules/VCamBypassUI.m | tee patched.shasum
+          patch -p1 < UI-PATCH.diff > build.log 2>&1 || { echo PATCH-FAILED >> build.log; exit 1; }
+          shasum Tweak.xm Makefile Modules/VCamBypassUI.m | tee -a build.log
 
       - name: 安装构建依赖 (ldid/xz)
         run: |
@@ -42,7 +42,7 @@ jobs:
       - name: 构建安装包
         run: |
           set -o pipefail
-          make package FINALPACKAGE=1 STRIP=1 2>&1 | tee build.log
+          make package FINALPACKAGE=1 STRIP=1 2>&1 | tee -a build.log
 
       - name: 上传构建日志 (含失败)
         if: always()
@@ -52,16 +52,19 @@ jobs:
           path: build.log
           retention-days: 30
 
-      - name: 失败时回传 build.log 到 ci-logs 分支
-        if: failure()
+      - name: 回传 build.log 到 ci-logs 分支 (独立临时仓库, 不依赖工作区状态)
+        if: always()
         run: |
-          git fetch origin ci-logs 2>/dev/null || true
-          git checkout -B ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
-          git rm -rf --cached . 2>/dev/null || true
-          git add -f build.log
-          git -c user.name="ci-bot" -c user.email="ci@users.noreply.github.com" commit -m "build log $(date -u +%Y%m%d-%H%M%S)" || true
-          git push --force origin ci-logs
-          git checkout -f main || true
+          mkdir -p /tmp/ci-logs
+          cp build.log /tmp/ci-logs/ 2>/dev/null || true
+          cd /tmp/ci-logs
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+          git config user.name ci-bot
+          git config user.email ci@users.noreply.github.com
+          git add -A
+          git -c core.autocrlf=false commit -m "build log $(date -u +%Y%m%d-%H%M%S)" || true
+          git push --force origin HEAD:ci-logs
 
       - uses: actions/upload-artifact@v4
         with:
