@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## v1.1.2 (2026-08-12)
+
+### 修复
+- fix: 音量键入口失效 — 原 IMP 调用改 method_invoke (runtime 按真实签名调用,
+  消除调用约定错位); 移除过严的 v@: 签名校验 (跳过即入口不装)。
+- fix: 音量入口增加 fallback 类 SBHIDValueModifyingButtonSet (iOS 16+ HID 路径)。
+- feat: 诊断日志完整化 ([vcbUI] 输出类/方法/签名/安装结果, log show 可查)。
+
 ## v1.1.1 (2026-08-12)
 
 ### 修复

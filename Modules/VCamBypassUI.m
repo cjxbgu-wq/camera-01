@@ -211,36 +211,47 @@ void vcToggleMenu(void) {
 static void vcVolumeInstall(void) {
     @try {
         Class cls = NSClassFromString(@"SBVolumeControl");
+        NSLog(@"[vcbUI] SBVolumeControl class: %@",
+              cls ? NSStringFromClass(cls) : @"(nil)");
         if (!cls) return;
         Method up = class_getInstanceMethod(cls, @selector(increaseVolume));
         Method dn = class_getInstanceMethod(cls, @selector(decreaseVolume));
-        if (!up || !dn) return;
-        // 签名校验: 仅替换 v@: (void 无参) 实现, 避免调用约定错位
-        const char *tup = method_getTypeEncoding(up);
-        const char *tdn = method_getTypeEncoding(dn);
-        if (!tup || !tdn || strcmp(tup, "v@:") != 0 || strcmp(tdn, "v@:") != 0) {
-            NSLog(@"[vcbUI] volume sig mismatch up=%s dn=%s, skip", tup ?: "(null)", tdn ?: "(null)");
-            return;
+        NSLog(@"[vcbUI] up=%s dn=%s",
+              up ? method_getTypeEncoding(up) : "(nil)",
+              dn ? method_getTypeEncoding(dn) : "(nil)");
+        if (!up || !dn) {
+            // fallback: iOS 16+ 音量键 HID 处理类
+            Class alt = NSClassFromString(@"SBHIDValueModifyingButtonSet");
+            if (alt) {
+                up = class_getInstanceMethod(alt, @selector(increaseVolume));
+                dn = class_getInstanceMethod(alt, @selector(decreaseVolume));
+                cls = alt;
+                NSLog(@"[vcbUI] fallback SBHIDValueModifyingButtonSet up=%s dn=%s",
+                      up ? method_getTypeEncoding(up) : "(nil)",
+                      dn ? method_getTypeEncoding(dn) : "(nil)");
+            }
+            if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
         }
-        IMP oup = method_getImplementation(up), odn = method_getImplementation(dn);
+        // method_invoke: runtime 按方法真实 type encoding 调用原实现,
+        // 不假设 v@: 签名, 无调用约定错位风险
+        Method upKeep = up, dnKeep = dn;
         method_setImplementation(up, imp_implementationWithBlock(^(id self) {
-            @try {
-                ((void (*)(id, SEL))oup)(self, @selector(increaseVolume));
-            } @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
+            @try { method_invoke(self, upKeep); }
+            @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
             NSTimeInterval now = CACurrentMediaTime();
             if (sDnT > 0 && (now - sDnT) < 1.5) { sUpT = sDnT = 0;
                 dispatch_async(dispatch_get_main_queue(), ^{ vcShowBall(); }); }
             else sUpT = now;
         }));
         method_setImplementation(dn, imp_implementationWithBlock(^(id self) {
-            @try {
-                ((void (*)(id, SEL))odn)(self, @selector(decreaseVolume));
-            } @catch (NSException *e) { NSLog(@"[vcbUI] dn orig fail: %@", e); }
+            @try { method_invoke(self, dnKeep); }
+            @catch (NSException *e) { NSLog(@"[vcbUI] dn orig fail: %@", e); }
             NSTimeInterval now = CACurrentMediaTime();
             if (sUpT > 0 && (now - sUpT) < 1.5) { sUpT = sDnT = 0;
                 dispatch_async(dispatch_get_main_queue(), ^{ vcToggleMenu(); }); }
             else sDnT = now;
         }));
+        NSLog(@"[vcbUI] volume hooks installed (method_invoke)");
     } @catch (NSException *e) {
         NSLog(@"[vcbUI] volume install fail: %@", e);
     }
