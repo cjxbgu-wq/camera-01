@@ -55,6 +55,7 @@ jobs:
       - name: 回传 build.log 到 ci-logs 分支 (独立临时仓库, 不依赖工作区状态)
         if: always()
         run: |
+          export GIT_TERMINAL_PROMPT=0
           mkdir -p /tmp/ci-logs
           cp build.log /tmp/ci-logs/ 2>/dev/null || true
           cd /tmp/ci-logs
@@ -63,8 +64,9 @@ jobs:
           git config user.name ci-bot
           git config user.email ci@users.noreply.github.com
           git add -A
-          git -c core.autocrlf=false commit -m "build log $(date -u +%Y%m%d-%H%M%S)" || true
+          git -c core.autocrlf=false commit -m "build log $(date -u +%Y%m%d-%H%M%S) [skip ci]" || true
           git push --force origin HEAD:ci-logs
+          echo CI-LOGS-PUSHED
 
       - uses: actions/upload-artifact@v4
         with:

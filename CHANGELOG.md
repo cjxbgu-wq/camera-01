@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## v1.1.1 (2026-08-12)
+
+### 修复
+- fix: TWEAK_NAME 品牌化后 plist 未同步改名 — Theos 找不到
+  vcampro-bypass.plist 导致 make package 失败。已重命名（注入过滤不变）。
+- fix: CI 日志回传步骤加固（[skip ci] 防触发构建、GIT_TERMINAL_PROMPT=0）。
+
 ## v1.1.0 (2026-08-12)
 
 ### 品牌化
