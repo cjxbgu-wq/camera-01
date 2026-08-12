@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.1.4 (2026-08-12)
+
+### 修复
+- fix: 悬浮球/菜单不显示 — 根因: 独立 UIWindow (initWithFrame + hidden=NO)
+  在 iOS 13+ 无 UIWindowScene 关联时不渲染 (SpringBoard 下窗口不可见)。
+  对齐参考工程(朋友版 UI 源码)机制: vcTopVC() 遍历 connectedScenes 找
+  keyWindow → rootVC → presented 链; 菜单 presentViewController
+  (FormSheet + preferredContentSize 300x330), 悬浮球 addSubview 到
+  topVC.view (可拖动/点击弹菜单)。移除 sBallWin/sMenuWin 独立窗口。
+
 ## v1.1.3 (2026-08-12)
 
 ### 修复

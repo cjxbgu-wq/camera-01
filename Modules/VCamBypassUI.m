@@ -25,9 +25,11 @@ void vcHideMenu(void);
 void vcHideBall(void);
 void vcShowMenu(void);
 void vcShowBall(void);
+@class VCBall;
+@class VCMenuVC;
 
-static UIWindow *sBallWin   = nil;
-static UIWindow *sMenuWin   = nil;
+static VCBall *sBallView  = nil;
+static VCMenuVC *sMenuVC  = nil;
 static NSTimeInterval sUpT  = 0;
 static NSTimeInterval sDnT  = 0;
 static BOOL sInstalled      = NO;
@@ -118,9 +120,19 @@ static UIButton *vcActionBtn(UIView *host, CGFloat y, NSString *title, id target
 @interface VCMenuVC : UIViewController
 @end
 @implementation VCMenuVC
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        // 对齐参考工程: 用 topVC present 弹窗, 不建独立 UIWindow
+        // (iOS 13+ 无 scene 关联的 UIWindow 不渲染 → 悬浮窗不显示)
+        self.modalPresentationStyle = UIModalPresentationFormSheet;
+        self.preferredContentSize = CGSizeMake(300, 330);
+    }
+    return self;
+}
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.frame = CGRectMake(0, 0, 300, 330);
+    self.view.bounds = CGRectMake(0, 0, 300, 330);
     self.view.backgroundColor = VCB_PANEL;
     self.view.layer.cornerRadius = 16;
     self.view.layer.borderColor = VCB_LINE.CGColor;
@@ -172,39 +184,78 @@ static NSString *vcStatusLine(void) {
 static BOOL vcReplaceOn(void)     { return vcam_bypass_get_replace() != 0; }
 static BOOL vcCameraPassOn(void)  { return vcam_bypass_get_camera_pass() != 0; }
 
+// 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
+static UIViewController *vcTopVC(void) {
+    @try {
+        UIWindow *w = nil;
+        if (@available(iOS 13.0, *)) {
+            for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                if ([s isKindOfClass:[UIWindowScene class]]) {
+                    for (UIWindow *win in ((UIWindowScene *)s).windows) {
+                        if (win.isKeyWindow) { w = win; break; }
+                    }
+                    if (w) break;
+                }
+            }
+        }
+        if (!w) w = [UIApplication sharedApplication].windows.firstObject;
+        if (!w) return nil;
+        UIViewController *vc = w.rootViewController;
+        while (vc.presentedViewController) vc = vc.presentedViewController;
+        return vc;
+    } @catch (NSException *e) { return nil; }
+}
+
 void vcShowBall(void) {
     @try {
-        if (sBallWin) { sBallWin.hidden = NO; return; }
-        sBallWin = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 64, 64)];
-        sBallWin.windowLevel = UIWindowLevelStatusBar + 100;
-        sBallWin.backgroundColor = [UIColor clearColor];
-        sBallWin.rootViewController = [UIViewController new];
-        sBallWin.userInteractionEnabled = YES;
-        VCBall *b = [[VCBall alloc] initWithFrame:sBallWin.bounds];
-        [sBallWin addSubview:b];
-        CGFloat w = [UIScreen mainScreen].bounds.size.width;
-        CGFloat h = [UIScreen mainScreen].bounds.size.height;
-        sBallWin.center = CGPointMake(w - 50, h * 0.35);
-        sBallWin.hidden = NO;
+        if (sBallView) { sBallView.hidden = NO; return; }
+        UIViewController *top = vcTopVC();
+        if (!top) { NSLog(@"[vcbUI] showBall: no topVC"); return; }
+        VCBall *b = [[VCBall alloc] initWithFrame:CGRectMake(0, 0, 64, 64)];
+        b.center = CGPointMake(top.view.bounds.size.width - 50,
+                               top.view.bounds.size.height * 0.35);
+        b.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+                             UIViewAutoresizingFlexibleTopMargin;
+        [top.view addSubview:b];
+        sBallView = b;
+        NSLog(@"[vcbUI] ball shown on topVC.view");
     } @catch (NSException *e) { NSLog(@"[vcbUI] showBall fail: %@", e); }
 }
 
 void vcShowMenu(void) {
     @try {
-        if (sMenuWin) { sMenuWin.hidden = NO; return; }
-        sMenuWin = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, 300, 340)];
-        sMenuWin.windowLevel = UIWindowLevelStatusBar + 101;
-        sMenuWin.backgroundColor = [UIColor clearColor];
-        sMenuWin.rootViewController = [VCMenuVC new];
-        CGRect sb = [UIScreen mainScreen].bounds;
-        sMenuWin.center = CGPointMake(CGRectGetMidX(sb), CGRectGetMidY(sb));
-        sMenuWin.hidden = NO;
+        UIViewController *top = vcTopVC();
+        if (!top) { NSLog(@"[vcbUI] showMenu: no topVC"); return; }
+        if (top.presentedViewController) {
+            NSLog(@"[vcbUI] showMenu: already presenting");
+            return;
+        }
+        if (sMenuVC) {
+            [top presentViewController:sMenuVC animated:YES completion:nil];
+            return;
+        }
+        VCMenuVC *vc = [VCMenuVC new];
+        sMenuVC = vc;
+        [top presentViewController:vc animated:YES completion:nil];
+        NSLog(@"[vcbUI] menu presented on topVC");
     } @catch (NSException *e) { NSLog(@"[vcbUI] showMenu fail: %@", e); }
 }
-void vcHideMenu(void) { if (sMenuWin) sMenuWin.hidden = YES; }
-void vcHideBall(void) { if (sBallWin) sBallWin.hidden = YES; }
+void vcHideMenu(void) {
+    @try {
+        if (!sMenuVC) return;
+        UIViewController *p = sMenuVC.presentingViewController;
+        [sMenuVC dismissViewControllerAnimated:YES completion:^{ sMenuVC = nil; }];
+        if (!p) sMenuVC = nil;
+    } @catch (NSException *e) {}
+}
+void vcHideBall(void) {
+    @try {
+        [sBallView removeFromSuperview];
+        sBallView = nil;
+    } @catch (NSException *e) {}
+}
 void vcToggleMenu(void) {
-    if (sMenuWin && !sMenuWin.hidden) { vcHideMenu(); } else { vcShowMenu(); }
+    if (sMenuVC && sMenuVC.presentingViewController) { vcHideMenu(); } else { vcShowMenu(); }
 }
 
 // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
