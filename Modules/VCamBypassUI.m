@@ -124,7 +124,7 @@ static UIColor *vcBgraToUI(uint32_t c) {
 }
 
 // ---- 组件工厂 (参考工程构图: 深色能量卡片) ----
-- (UIView *)mkChip:(UIView *)host x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w label:(NSString *)l val:(NSString *)v color:(UIColor *)c {
+- (UILabel *)mkChip:(UIView *)host x:(CGFloat)x y:(CGFloat)y w:(CGFloat)w label:(NSString *)l val:(NSString *)v color:(UIColor *)c {
     UIView *box = [[UIView alloc] initWithFrame:CGRectMake(x, y, w, 26)];
     box.backgroundColor = [UIColor colorWithWhite:1 alpha:0.05];
     box.layer.cornerRadius = 8;
@@ -236,12 +236,6 @@ static UIColor *vcBgraToUI(uint32_t c) {
     sep.backgroundColor = VCB_LINE;
     [card addSubview:sep];
 
-    CGFloat mw = (cw - 40 - 30) / 4;
-    _chipVal[0] = [self mkChip:pg1 x:20 y:12 w:mw label:@"REPLACE" val:@"ON" color:VCB_GREEN];
-    _chipVal[1] = [self mkChip:pg1 x:20 + (mw + 10) y:12 w:mw label:@"CAMERA" val:@"ON" color:VCB_GREEN];
-    _chipVal[2] = [self mkChip:pg1 x:20 + (mw + 10) * 2 y:12 w:mw label:@"HOOKS" val:@"--" color:VCB_AMBER];
-    _chipVal[3] = [self mkChip:pg1 x:20 + (mw + 10) * 3 y:12 w:mw label:@"PATTERN" val:@"RED" color:VCB_CYAN];
-
     // 双页: FUNC / STATUS
     _tab1 = [self mkTab:@"FUNC" x:20 sel:YES tag:1];
     _tab2 = [self mkTab:@"STATUS" x:84 sel:NO tag:2];
@@ -265,6 +259,12 @@ static UIColor *vcBgraToUI(uint32_t c) {
     [_pages addSubview:pg1];
     [_pages addSubview:pg2];
 
+    CGFloat mw = (cw - 40 - 30) / 4;
+    _chipVal[0] = [self mkChip:pg1 x:20 y:12 w:mw label:@"REPLACE" val:@"ON" color:VCB_GREEN];
+    _chipVal[1] = [self mkChip:pg1 x:20 + (mw + 10) y:12 w:mw label:@"CAMERA" val:@"ON" color:VCB_GREEN];
+    _chipVal[2] = [self mkChip:pg1 x:20 + (mw + 10) * 2 y:12 w:mw label:@"HOOKS" val:@"--" color:VCB_AMBER];
+    _chipVal[3] = [self mkChip:pg1 x:20 + (mw + 10) * 3 y:12 w:mw label:@"PATTERN" val:@"RED" color:VCB_CYAN];
+
     CGFloat bw = (cw - 40 - 10) / 2;
     CGFloat lx = 20, rx = 20 + bw + 10;
     // ---- 页1 FUNC ----
@@ -279,10 +279,13 @@ static UIColor *vcBgraToUI(uint32_t c) {
     cT.textColor = VCB_GRAY;
     [pg1 addSubview:cT];
 
-    [self mkSwitchRow:pg1 x:lx y:80 w:bw title:@"画面替换" sw:&_swReplace];
+    UISwitch *swR = nil, *swC = nil;
+    [self mkSwitchRow:pg1 x:lx y:80 w:bw title:@"画面替换" sw:&swR];
+    _swReplace = swR;
     _swReplace.on = vcReplaceOn();
     [_swReplace addTarget:self action:@selector(onReplace:) forControlEvents:UIControlEventValueChanged];
-    [self mkSwitchRow:pg1 x:lx y:132 w:bw title:@"相机真画面" sw:&_swCamera];
+    [self mkSwitchRow:pg1 x:lx y:132 w:bw title:@"相机真画面" sw:&swC];
+    _swCamera = swC;
     _swCamera.on = vcCameraPassOn();
     [_swCamera addTarget:self action:@selector(onCamera:) forControlEvents:UIControlEventValueChanged];
 
@@ -298,8 +301,8 @@ static UIColor *vcBgraToUI(uint32_t c) {
         [pg1 addSubview:cb];
     }
 
-    [pg1 addSubview:[self mkBtn:@"RE-INJECT" x:lx y:216 w:bw h:44 font:10 color:[UIColor colorWithRed:0.35 green:0.55 blue:0.95 alpha:1] tag:1]];
-    [pg1 addSubview:[self mkBtn:@"EXPORT LOG" x:lx y:268 w:bw h:44 font:10 color:[UIColor colorWithRed:0.45 green:0.62 blue:0.55 alpha:1] tag:2]];
+    [pg1 addSubview:[self mkBtn:@"RE-INJECT" x:20 y:216 w:cw - 40 h:44 font:11 color:[UIColor colorWithRed:0.35 green:0.55 blue:0.95 alpha:1] tag:1]];
+    [pg1 addSubview:[self mkBtn:@"EXPORT LOG" x:20 y:268 w:cw - 40 h:44 font:11 color:[UIColor colorWithRed:0.45 green:0.62 blue:0.55 alpha:1] tag:2]];
 
     // ---- 页2 STATUS ----
     CGFloat barX = cw - 20 - 44;
