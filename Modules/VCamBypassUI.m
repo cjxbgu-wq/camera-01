@@ -6,8 +6,6 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
-#import <dlfcn.h>
 
 #define VCB_BG   [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0]
 #define VCB_PANEL [UIColor colorWithRed:0.11 green:0.14 blue:0.21 alpha:1.0]
@@ -209,16 +207,11 @@ void vcToggleMenu(void) {
     if (sMenuWin && !sMenuWin.hidden) { vcHideMenu(); } else { vcShowMenu(); }
 }
 
-// method_invoke 在 SDK 头中声明为无原型 varargs (Clang ARC 拒绝直接调用),
-// 用 dlsym 运行时解析 + 自定义函数指针, 兼容任意 SDK
-typedef id (*vcMethodInvokeFn)(id, Method, ...);
-static id vcInvokeMethod(id self, Method m) {
-    static vcMethodInvokeFn fn = NULL;
-    if (!fn) fn = (vcMethodInvokeFn)dlsym(RTLD_DEFAULT, "method_invoke");
-    if (fn) return fn(self, m, NULL);
-    return nil;
-}
-
+// 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
+// 原实现直接强转调用 (F)method_getImplementation(m) —— runtime 返回的 IMP
+// 已带 ptrauth 签名, 在 arm64e (iPhone XS+) 安全;
+// 不要用 method_invoke: 它在 arm64e 上对 IMP 签名处理不当会崩 SpringBoard
+// (症状: 按音量键屏幕黑屏/锁屏).
 static void vcVolumeInstall(void) {
     @try {
         Class cls = NSClassFromString(@"SBVolumeControl");
@@ -230,24 +223,14 @@ static void vcVolumeInstall(void) {
         NSLog(@"[vcbUI] up=%s dn=%s",
               up ? method_getTypeEncoding(up) : "(nil)",
               dn ? method_getTypeEncoding(dn) : "(nil)");
-        if (!up || !dn) {
-            // fallback: iOS 16+ 音量键 HID 处理类
-            Class alt = NSClassFromString(@"SBHIDValueModifyingButtonSet");
-            if (alt) {
-                up = class_getInstanceMethod(alt, @selector(increaseVolume));
-                dn = class_getInstanceMethod(alt, @selector(decreaseVolume));
-                cls = alt;
-                NSLog(@"[vcbUI] fallback SBHIDValueModifyingButtonSet up=%s dn=%s",
-                      up ? method_getTypeEncoding(up) : "(nil)",
-                      dn ? method_getTypeEncoding(dn) : "(nil)");
-            }
-            if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
-        }
-        // method_invoke: runtime 按方法真实 type encoding 调用原实现,
-        // 不假设 v@: 签名, 无调用约定错位风险
-        Method upKeep = up, dnKeep = dn;
+        if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
+        typedef void (*vcVolFn)(id, SEL);
+        vcVolFn origUp = (vcVolFn)method_getImplementation(up);
+        vcVolFn origDn = (vcVolFn)method_getImplementation(dn);
+        SEL selUp = @selector(increaseVolume);
+        SEL selDn = @selector(decreaseVolume);
         method_setImplementation(up, imp_implementationWithBlock(^(id self) {
-            @try { vcInvokeMethod(self, upKeep); }
+            @try { if (origUp) origUp(self, selUp); }
             @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
             NSTimeInterval now = CACurrentMediaTime();
             if (sDnT > 0 && (now - sDnT) < 1.5) { sUpT = sDnT = 0;
@@ -255,14 +238,14 @@ static void vcVolumeInstall(void) {
             else sUpT = now;
         }));
         method_setImplementation(dn, imp_implementationWithBlock(^(id self) {
-            @try { vcInvokeMethod(self, dnKeep); }
+            @try { if (origDn) origDn(self, selDn); }
             @catch (NSException *e) { NSLog(@"[vcbUI] dn orig fail: %@", e); }
             NSTimeInterval now = CACurrentMediaTime();
             if (sUpT > 0 && (now - sUpT) < 1.5) { sUpT = sDnT = 0;
                 dispatch_async(dispatch_get_main_queue(), ^{ vcToggleMenu(); }); }
             else sDnT = now;
         }));
-        NSLog(@"[vcbUI] volume hooks installed (method_invoke)");
+        NSLog(@"[vcbUI] volume hooks installed (direct IMP, ref-style)");
     } @catch (NSException *e) {
         NSLog(@"[vcbUI] volume install fail: %@", e);
     }

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.1.3 (2026-08-12)
+
+### 修复
+- fix: 按音量键触发屏幕黑屏/锁屏 — 根因是 method_invoke 在 arm64e
+  (iPhone XS+, 带 ptrauth) 上对 IMP 签名处理不当, 调用原 increaseVolume/
+  decreaseVolume 时崩 SpringBoard。改为对齐参考工程(朋友版 UI 源码)写法:
+  method_getImplementation 强转直接调用 (runtime 已返回签名好的 IMP,
+  arm64e 安全)。移除 dlsym/method_invoke/fallback 类, 日志保留。
+- fix: 清理无用 import (<dlfcn.h>/<objc/message.h>)。
+
 ## v1.1.2 (2026-08-12)
 
 ### 修复
