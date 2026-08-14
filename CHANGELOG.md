@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.2.1 (2026-08-14)
+
+### 修复 (核心: 注入目标不再猜测)
+- fix: v39 假设「千面在 com.apple.lskdd 进程」仍不可验证 — 真机三轮日志中
+  lskdd 进程从未启动/注入, 且用户无法确认该 App 存在. v40: **移除
+  vcampro-bypass.plist 的 Filter → 全进程注入** (ellekit/substrate 无 Filter
+  = 注入所有进程). 引擎为任意进程设计: 匹配到 vcameracrack 才 hook, 其他进程
+  仅空转轮询 (无副作用); UI 仍只在 SpringBoard 挂载 (vcap_ui_mount 已按进程名
+  拦截). 用户在用千面替换成功的任意 App 中测试, 引擎必然进入.
+
 ## v1.2.0 (2026-08-14)
 
 ### 修复 (核心: 相机替换全部功能)

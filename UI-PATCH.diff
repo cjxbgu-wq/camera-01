@@ -1313,10 +1313,10 @@ index 4fe9530..144a376 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..9b77b1e 100644
+index 9bc858c..3606d46 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1180 @@
+@@ -1,370 +1,1181 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2695,8 +2695,9 @@ index 9bc858c..9b77b1e 100644
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
 +                   ^{ tryObjCSwizzle(100); });
 +    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
-+    // [PATCH-v35/v39] 状态回写由「匹配到 vcameracrack 的进程」启动 (见 onImageLoad),
-+    // 不能按进程名猜 — 千面实际引擎在 com.apple.lskdd 进程 (vcampro-bypass.plist 已对齐)
++    // [PATCH-v35/v39/v40] 状态回写由「匹配到 vcameracrack 的进程」启动 (见 onImageLoad),
++    // v40: plist Filter 已移除 → 全进程注入, 引擎在任意含 vcameracrack 的进程自适应激活
++    // (千面实测只加载于其自身 filter 的 App 进程; 我们不再猜目标进程)
 +    // [PATCH-v33] 视频读取器锁初始化
 +    if (!gLockA) gLockA = [NSLock new];
 +    vcam_readControls(); // 启动即同步一次 controls
