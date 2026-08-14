@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## v1.2.3 (2026-08-14)
+
+### 重写 (替换核心 = 千面同路线: 直接 hook 系统相机管线)
+- v41 探测拿到真实 selector 后, 替换核心整体重写 (v42):
+  - **废弃全部 vcameracrack 内部依赖**: LicenseCore/VCamCore swizzle、0x63xxx 偏移写
+    ivars、gate2(0xe9f4)/photoenc(0xe240) MSHookFunction、SecKeyVerifySignature hook、
+    stash 槽读取、ivar enforcer 定时器 — 全部移除 (千面版无这些符号/偏移)
+  - **新 hook 点** (method_setImplementation, 每 1s 轮询直到类出现, 不放弃):
+    - `-[BWNodeOutput emitSampleBuffer:]` → 3rd party/网页 相机输出路径 (替换)
+    - `-[BWStillImageScalerNode renderSampleBuffer:forInput:]` → 拍照路径 (替换)
+    - `-[BWPhotoEncoderNode renderSampleBuffer:forInput:]` → Apple Camera 编码路径
+      (**跳过** — v26 实测替换会黑屏, 与千面行为一致)
+  - 替换内容复用 v23_doReplace 完整管线 (视频/图片/颜色注入/旋转/暂停/图案,
+    VTPixelTransferSession 等比适配), controls 跨进程同步不变
+  - 状态回写 v35 reporter 由「系统 hook 完成」触发 (不再依赖 vcameracrack 加载);
+    status 字段语义: p1=emit p2=photoenc p3=still hook 状态; UI 状态页标签同步更新
+- 清理: 移除 vcam_addrInImage/LVP bootstrap/旧 swizzle 辅助/onImageLoad 引擎激活
+  逻辑 (仅保留 image 枚举诊断日志)
+
 ## v1.2.2 (2026-08-14)
 
 ### 诊断 (自检结论: 引擎 hook 目标不存在)

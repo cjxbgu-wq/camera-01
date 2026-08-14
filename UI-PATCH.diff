@@ -66,7 +66,7 @@ index 3fdd407..c938436 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..49eeeca 100644
+index 4fe9530..c3080f1 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,51 @@
@@ -440,7 +440,7 @@ index 4fe9530..49eeeca 100644
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +394,722 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +394,721 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
@@ -708,13 +708,12 @@ index 4fe9530..49eeeca 100644
 +    _srcActiveVal.font = [UIFont boldSystemFontOfSize:9.5];
 +    _srcActiveVal.textColor = VCB_GREEN;
 +    [pg2 addSubview:_srcActiveVal];
-+    // 挂钩链路
-+    [self mkStatusRow:pg2 y:140 label:@"OC 方法交换" tag:1];
-+    [self mkStatusRow:pg2 y:172 label:@"C 函数挂钩" tag:2];
-+    [self mkStatusRow:pg2 y:204 label:@"GATE2 授权" tag:3];
-+    [self mkStatusRow:pg2 y:236 label:@"SECKEY 验证" tag:4];
-+    [self mkStatusRow:pg2 y:268 label:@"照片编码器" tag:5];
-+    [self mkStatusRow:pg2 y:300 label:@"VCAM 引擎" tag:6];   // [PATCH-v36] 引擎是否匹配到 vcam dylib
++    // 挂钩链路 [PATCH-v42] 千面路线: 系统相机管线 hook 状态
++    [self mkStatusRow:pg2 y:140 label:@"系统管线挂钩" tag:1];
++    [self mkStatusRow:pg2 y:172 label:@"BWNodeOutput.emit" tag:2];
++    [self mkStatusRow:pg2 y:204 label:@"BWPhotoEncoder" tag:3];
++    [self mkStatusRow:pg2 y:236 label:@"BWStillScaler" tag:4];
++    [self mkStatusRow:pg2 y:300 label:@"替换引擎激活" tag:6];   // [PATCH-v42] 系统 hook 完成 = 引擎激活
 +    // 能量条
 +    CGFloat barX = 286;
 +    UILabel *enL = [[UILabel alloc] initWithFrame:CGRectMake(barX, 128, 44, 10)];
@@ -928,6 +927,16 @@ index 4fe9530..49eeeca 100644
 -    _chipVal[0].textColor = vcReplaceOn() ? VCB_GREEN : VCB_RED;
 -    _chipVal[1].text = vcCameraPassOn() ? @"ON" : @"OFF";
 -    _chipVal[1].textColor = vcCameraPassOn() ? VCB_GREEN : VCB_RED;
+-    int hooks = (sw ? 1 : 0) + (cf ? 1 : 0) + (g2 ? 1 : 0) + (sk ? 1 : 0) + (pe ? 1 : 0);
+-    _chipVal[2].text = [NSString stringWithFormat:@"%d/5", hooks];
+-    _chipVal[2].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
+-    _swReplace.on = vcReplaceOn();
+-    _swCamera.on = vcCameraPassOn();
+-    BOOL st[5] = {sw, cf, g2, sk, pe};
+-    UIColor *good = VCB_GREEN, *bad = VCB_GRAY;
+-    for (int i = 0; i < 5; i++) {
+-        _stVal[i].text = st[i] ? @"ON" : @"--";
+-        _stVal[i].textColor = st[i] ? good : bad;
 +    // 替换
 +    BOOL rep = vcReplaceOn();
 +    _chipVal[0].text = rep ? @"开" : @"关";
@@ -938,19 +947,10 @@ index 4fe9530..49eeeca 100644
 +    if (mode == 1) { _chipVal[1].text = @"视频"; _chipVal[1].textColor = VCB_CYAN; }
 +    else if (mode == 2) { _chipVal[1].text = @"图片"; _chipVal[1].textColor = [UIColor colorWithRed:0.38 green:0.65 blue:0.98 alpha:1]; }
 +    else { _chipVal[1].text = @"图案"; _chipVal[1].textColor = VCB_AMBER; }
-+    // 挂钩
-     int hooks = (sw ? 1 : 0) + (cf ? 1 : 0) + (g2 ? 1 : 0) + (sk ? 1 : 0) + (pe ? 1 : 0);
--    _chipVal[2].text = [NSString stringWithFormat:@"%d/5", hooks];
--    _chipVal[2].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
--    _swReplace.on = vcReplaceOn();
--    _swCamera.on = vcCameraPassOn();
--    BOOL st[5] = {sw, cf, g2, sk, pe};
--    UIColor *good = VCB_GREEN, *bad = VCB_GRAY;
--    for (int i = 0; i < 5; i++) {
--        _stVal[i].text = st[i] ? @"ON" : @"--";
--        _stVal[i].textColor = st[i] ? good : bad;
-+    _chipVal[3].text = [NSString stringWithFormat:@"%d/5", hooks];
-+    _chipVal[3].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
++    // 挂钩 [PATCH-v42] 4 个系统 hook 点 (emit/photoenc/still/引擎)
++    int hooks = (sw ? 1 : 0) + (cf ? 1 : 0) + (g2 ? 1 : 0) + (sk ? 1 : 0);
++    _chipVal[3].text = [NSString stringWithFormat:@"%d/4", hooks];
++    _chipVal[3].textColor = hooks == 4 ? VCB_GREEN : VCB_AMBER;
 +    // 播放/暂停
 +    BOOL paused = vcam_bypass_get_pause() != 0;
 +    [_btnPause setTitle:paused ? @"⏸ 暂停中" : @"播放 / 暂停" forState:UIControlStateNormal];
@@ -977,7 +977,7 @@ index 4fe9530..49eeeca 100644
          CGRect f = _barFill.frame;
 -        f.size.height = 212.0 * hooks / 5.0;
 -        f.origin.y = 84 + 212 - f.size.height;
-+        f.size.height = 148.0 * hooks / 5.0;
++        f.size.height = 148.0 * hooks / 4.0;
 +        f.origin.y = 154 + 148 - f.size.height;
          _barFill.frame = f;
      }];
@@ -1291,7 +1291,7 @@ index 4fe9530..49eeeca 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1186,15 @@ void vcToggleMenu(void) {
+@@ -499,21 +1185,15 @@ void vcToggleMenu(void) {
  }
  
  // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
@@ -1316,7 +1316,7 @@ index 4fe9530..49eeeca 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -547,16 +1228,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1227,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
@@ -1345,10 +1345,10 @@ index 4fe9530..49eeeca 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..6394d58 100644
+index 9bc858c..af842d5 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1255 @@
+@@ -1,370 +1,999 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -1719,14 +1719,17 @@ index 9bc858c..6394d58 100644
 -                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
 -                   ^{ tryObjCSwizzle(100); });
 -}
-+// vcam125 bypass tweak — runtime hook (NO __text disk modification)
++// vcam125 bypass tweak — 相机画面替换引擎
 +//
-+// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
-+// callback 监听 vcameracrack 加载时刻, 立即 swap ObjC method IMP + MSHookFunction
-+// internal C function (gate2) + framework SecKeyVerifySignature.
++// [PATCH-v42] 千面路线重写: 不再依赖 vcameracrack 内部 (千面版无 LicenseCore/
++// VCamCore/0x63xxx 偏移 — Mach-O 自检证实). 直接 hook 系统相机管线:
++//   -[BWNodeOutput emitSampleBuffer:]             → 3rd party/网页 相机输出
++//   -[BWStillImageScalerNode renderSampleBuffer:forInput:] → 拍照
++//   -[BWPhotoEncoderNode renderSampleBuffer:forInput:]     → Apple Camera 编码 (跳过防黑屏)
++// 替换内容走 v23_doReplace 管线 (视频/图片/颜色/旋转/暂停/图案), 跨进程
++// controls 同步 (SpringBoard UI ↔ 引擎进程).
 +//
-+// vcam125 dylib 在磁盘上一个字节没动 → 没 PAC/codesign/RootHide 装载层风险.
-+// 之前 v6-v14 全因 patch dylib 字节让 SB 卡 boot, v15 走完全不同的路.
++// 装载: mediaserverd + SpringBoard (+ 测试 App bundle id 由 plist Filter 控制).
 +
 +#import <Foundation/Foundation.h>
 +#import <objc/runtime.h>
@@ -1767,31 +1770,6 @@ index 9bc858c..6394d58 100644
 +    static dispatch_once_t once;
 +    dispatch_once(&once, ^{ dir = vcam_jbPath(@"var/mobile/Library/vcamplus"); });
 +    return dir;
-+}
-+
-+// [PATCH-v36] Mach-O 段边界校验: vcam125 偏移是静态逆向固定值, 若千面升级导致
-+// 偏移错位, 直接写/挂错地址 = EXC_BAD_ACCESS (信号级, @try 拦不住) → mediaserverd
-+// 崩溃循环 → 相机黑屏. 所有偏移操作前先校验地址在 image 映射段内.
-+static BOOL vcam_addrInImage(const struct mach_header *mh, uintptr_t addr, BOOL needWrite) {
-+    if (!mh) return NO;
-+    const struct mach_header_64 *mh64 = (const struct mach_header_64 *)mh;
-+    if (mh64->magic != MH_MAGIC_64 || mh64->ncmds == 0) return NO;
-+    uintptr_t base = (uintptr_t)mh;
-+    const struct load_command *lc = (const struct load_command *)(mh64 + 1);
-+    for (uint32_t i = 0; i < mh64->ncmds; i++) {
-+        if (lc->cmdsize < sizeof(struct load_command)) break;
-+        if (lc->cmd == LC_SEGMENT_64) {
-+            const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
-+            uintptr_t s = base + seg->vmaddr;
-+            uintptr_t e = s + seg->vmsize;
-+            if (addr >= s && addr < e) {
-+                if (!needWrite) return YES;
-+                return (seg->initprot & VM_PROT_WRITE) != 0;
-+            }
-+        }
-+        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
-+    }
-+    return NO;
 +}
 +
 +// ===== [PATCH-v32] UI 控制/状态接口 (VCamBypassUI 模块调用) =====
@@ -2299,57 +2277,87 @@ index 9bc858c..6394d58 100644
 +}
 +
 +
-+// ============== Replacement IMPs ==============
++// ============== Replacement core ==============
++// [PATCH-v42] 千面路线: 直接 hook 系统相机管线, 不再依赖 vcameracrack 内部
++// (千面版无 LicenseCore/VCamCore/0x63xxx 偏移 — Mach-O 自检已证实).
++// 替换入口 = 系统类方法 (v41 探测已拿到全部真实 selector):
++//   -[BWNodeOutput emitSampleBuffer:]             → 3rd party/网页 相机输出路径
++//   -[BWStillImageScalerNode renderSampleBuffer:forInput:] → 拍照路径
++//   -[BWPhotoEncoderNode renderSampleBuffer:forInput:]     → Apple Camera 编码路径 (跳过防黑屏)
 +
-+static BOOL r_isLicenseValid(id self, SEL _cmd) { return YES; }
-+static BOOL r_loadPersistedLicense(id self, SEL _cmd) { return YES; }
-+static NSString *r_licenseStatusString(id self, SEL _cmd) {
-+    return @"已授权 (v15 bypass)";
++static void v23_doReplace(CVPixelBufferRef dst); // 定义在下方渲染管线区
++static void v35_startStatusReporter(void);       // 定义在下方状态回写区
++static int s_didObjCSwizzle = 0;                 // = 系统 hook 完成 (status 字段 0, UI 状态页)
++
++static void v42_maybeReplace(CMSampleBufferRef sb, BOOL photoencPath) {
++    if (!sb) return;
++    if (photoencPath) return; // v26 实测: Apple Camera 编码路径替换会黑屏 → 保持真画面
++    vcam_readControls();      // 跨进程同步 (SpringBoard UI -> 引擎进程)
++    if (!gReplaceEnabled) return;
++    CVPixelBufferRef pb = CMSampleBufferGetImageBuffer(sb);
++    if (!pb) return;
++    v23_doReplace(pb);
 +}
-+static unsigned int r_features(id self, SEL _cmd) { return 0xFFFFFFFFU; }
-+static long long r_expiryUnix(id self, SEL _cmd) { return 4070908800LL; }  // 2099
 +
-+static BOOL r_VC_isEnabled(id self, SEL _cmd) { return YES; }
-+__attribute__((unused))
-+static BOOL r_VC_hasReplacementFrame(id self, SEL _cmd) { return YES; }
-+// v20: bootstrap LVP decoding + VT transfer 替换
-+// 之前 v19 hasValidFrame=NO 因为 vcam125 内部从来没调 setVideoSize/startDecodingThread
-+// (那条 trigger 链在我们 short-circuit renderReplacement 时断了). 自己 bootstrap.
-+static VTPixelTransferSessionRef s_xferSession = NULL;
-+static int s_lvpBootstrapped = 0;
++static void v42_emitSampleBuffer(id self, SEL _cmd, CMSampleBufferRef sb) {
++    v42_maybeReplace(sb, NO);
++}
 +
-+__attribute__((unused))
-+static void v22_bootstrapLVP(CVPixelBufferRef dst) {
-+    if (s_lvpBootstrapped) return;
-+    Class lvpCls = objc_getClass("LocalVideoPlayer");
-+    if (!lvpCls) return;
-+    id lvp = ((id (*)(Class, SEL))objc_msgSend)(lvpCls, sel_registerName("sharedInstance"));
-+    if (!lvp) return;
-+    size_t w = CVPixelBufferGetWidth(dst);
-+    size_t h = CVPixelBufferGetHeight(dst);
-+    if (w == 0 || h == 0) return;
++static void v42_renderSBForInput(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
++    BOOL photoenc = [NSStringFromClass([self class]) hasPrefix:@"BWPhotoEncoder"];
++    v42_maybeReplace(sb, photoenc);
++}
 +
-+    @try {
-+        // v22: 用 KVC 直接写 ivar (避免 ARM64 ABI struct passing 问题)
-+        NSNumber *wNum = [NSNumber numberWithUnsignedLong:w];
-+        NSNumber *hNum = [NSNumber numberWithUnsignedLong:h];
-+        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(
-+            lvp, sel_registerName("setValue:forKey:"), wNum, @"_targetWidth");
-+        ((void (*)(id, SEL, id, NSString *))objc_msgSend)(
-+            lvp, sel_registerName("setValue:forKey:"), hNum, @"_targetHeight");
-+
-+        // 触发 decode thread + frame timer + 重 load
-+        ((void (*)(id, SEL))objc_msgSend)(lvp, sel_registerName("reloadVideo"));
-+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(lvp, sel_registerName("startDecodingThreadForGeneration:"), (NSInteger)1);
-+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(lvp, sel_registerName("startFrameTimerForGeneration:"), (NSInteger)1);
-+        ((void (*)(id, SEL))objc_msgSend)(lvp, sel_registerName("play"));
-+
-+        NSLog(@"[v22bypass] LVP bootstrap: KVC _targetWidth=%zu _targetHeight=%zu + reload + startDecode + play", w, h);
-+        s_lvpBootstrapped = 1;
-+    } @catch (NSException *e) {
-+        NSLog(@"[v22bypass] LVP bootstrap fail: %@", e);
++// 轮询挂系统 hook: 类可能相机激活时才出现 → 每 1s 重试, 不放弃
++static int s_didSystemHook = 0;
++static void v42_hookSystem(void) {
++    if (s_didSystemHook) return;
++    Class cls = NULL;
++    Method m = NULL;
++    cls = objc_getClass("BWNodeOutput");
++    if (cls && (m = class_getInstanceMethod(cls, sel_registerName("emitSampleBuffer:")))) {
++        if (method_getImplementation(m) != (IMP)v42_emitSampleBuffer) {
++            method_setImplementation(m, (IMP)v42_emitSampleBuffer);
++            gHookGate2 = 1;
++            vcam_log2("v42 hooked -[BWNodeOutput emitSampleBuffer:]");
++        }
++    }
++    cls = objc_getClass("BWPhotoEncoderNode");
++    if (cls && (m = class_getInstanceMethod(cls, sel_registerName("renderSampleBuffer:forInput:")))) {
++        if (method_getImplementation(m) != (IMP)v42_renderSBForInput) {
++            method_setImplementation(m, (IMP)v42_renderSBForInput);
++            gHookSecKey = 1;
++            vcam_log2("v42 hooked -[BWPhotoEncoderNode renderSampleBuffer:forInput:]");
++        }
++    }
++    cls = objc_getClass("BWStillImageScalerNode");
++    if (cls && (m = class_getInstanceMethod(cls, sel_registerName("renderSampleBuffer:forInput:")))) {
++        if (method_getImplementation(m) != (IMP)v42_renderSBForInput) {
++            method_setImplementation(m, (IMP)v42_renderSBForInput);
++            gHookPhotoEnc = 1;
++            vcam_log2("v42 hooked -[BWStillImageScalerNode renderSampleBuffer:forInput:]");
++        }
++    }
++    if (gHookGate2 || gHookSecKey || gHookPhotoEnc) {
++        s_didSystemHook = 1;
++        s_didObjCSwizzle = 1;
++        vcam_log2("*** v42 system hooks complete");
++        v35_startStatusReporter(); // 引擎进程: 写真实状态
 +    }
 +}
++
++static void tryObjCSwizzle(int retriesLeft) {
++    if (s_didSystemHook) return;
++    v42_hookSystem();
++    if (!s_didSystemHook) {
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC),
++                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
++                       ^{ tryObjCSwizzle(0); });
++    }
++}
++
++// VT transfer 会话 (替换管线共享)
++static VTPixelTransferSessionRef s_xferSession = NULL;
 +
 +// v23: 生成一个纯色 BGRA test pattern, lazy cache. 用来验证 hook+VT transfer 端到端 work.
 +static size_t s_testW = 0, s_testH = 0;
@@ -2427,62 +2435,7 @@ index 9bc858c..6394d58 100644
 +    VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
 +}
 +
-+static void r_VC_renderReplacementToPixelBuffer(id self, SEL _cmd, CVPixelBufferRef pb) {
-+    // 3rd party / 网页 path (BWNodeOutput.emit, photoCompensation=0)
-+    v23_doReplace(pb);
-+}
-+static void r_VC_renderReplacementToPixelBuffer_photoCompensation(id self, SEL _cmd, CVPixelBufferRef pb, int flag) {
-+    // v26: Apple Camera (flag=1) 路径下 BWPhotoEncoder.render orig 对 modified dst 敏感
-+    // → 黑屏. 跳过 transfer 让 Apple Camera 显示真画面 (no crash, no replacement).
-+    // 3rd party 应该不会到这里 (它走 renderReplacementToPixelBuffer:, 不带 flag)
-+    if (flag && gCameraPassEnabled) return; // [PATCH-v32] UI 相机真画面开关
-+    v23_doReplace(pb);
-+}
-+
-+// ============== gate2 hook (vcam125 internal C function @ 0xe9f4) ==============
-+
-+typedef int (*gate2_fn_t)(void);
-+static gate2_fn_t orig_gate2 = NULL;
-+static int my_gate2(void) { return 1; }
-+
-+// ============== SecKeyVerifySignature hook (Apple framework) ==============
-+
-+typedef Boolean (*SecKeyVerifySig_fn_t)(SecKeyRef, CFStringRef, CFDataRef, CFDataRef, CFErrorRef *);
-+static SecKeyVerifySig_fn_t orig_SecKeyVerifySig = NULL;
-+static Boolean my_SecKeyVerifySig(SecKeyRef key, CFStringRef alg, CFDataRef signed_data, CFDataRef sig, CFErrorRef *err) {
-+    if (err) *err = NULL;
-+    return true;
-+}
-+
 +// ============== Helpers ==============
-+
-+static void swizzle_class(Class cls, SEL sel, IMP newImp, const char *label) {
-+    if (!cls) return;
-+    Method m = class_getClassMethod(cls, sel);
-+    if (m) {
-+        method_setImplementation(m, newImp);
-+        vcam_log2("swap +[%s %s]", class_getName(cls), sel_getName(sel));
-+    } else {
-+        vcam_log2("+[%s %s] NOT FOUND", class_getName(cls), sel_getName(sel));
-+    }
-+}
-+static void swizzle_inst(Class cls, SEL sel, IMP newImp, const char *label) {
-+    if (!cls) return;
-+    Method m = class_getInstanceMethod(cls, sel);
-+    if (m) {
-+        method_setImplementation(m, newImp);
-+        vcam_log2("swap -[%s %s]", class_getName(cls), sel_getName(sel));
-+    } else {
-+        vcam_log2("-[%s %s] NOT FOUND", class_getName(cls), sel_getName(sel));
-+    }
-+}
-+
-+// ============== dyld add_image callback ==============
-+
-+static int s_didCFunctionHooks = 0;
-+static int s_didObjCSwizzle = 0;
-+static const struct mach_header *s_vcamMh = NULL;
-+static char s_vcamDylibName[256] = "";   // [PATCH-v36] 匹配到的 dylib 路径 (诊断/状态)
 +
 +// ===== [PATCH-v35] 引擎状态回写文件 (跨进程检测修复: UI 读 mediaserverd 真实状态) =====
 +// 原因: vcam_bypass_status 在 SpringBoard 读本进程 globals, 永远 0/5 → 面板误导.
@@ -2503,127 +2456,14 @@ index 9bc858c..6394d58 100644
 +            [fm createDirectoryAtPath:VCAM_DIR withIntermediateDirectories:YES attributes:nil error:nil];
 +            int sm = vcam_videoExists() ? 1 : (vcam_imageExists() ? 2 : 0);
 +            NSString *line = [NSString stringWithFormat:@"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-+                s_didObjCSwizzle, s_didCFunctionHooks, gHookGate2, gHookSecKey, gHookPhotoEnc,
++                s_didObjCSwizzle, gHookGate2, gHookSecKey, gHookPhotoEnc, 0,
 +                gReplaceEnabled, gColorInject, sm, gVideoPaused,
-+                gActionActive, s_vcamMh ? 1 : 0];
++                gActionActive, s_didSystemHook];
 +            [line writeToFile:VCAM_STATUS atomically:YES encoding:NSUTF8StringEncoding error:nil];
 +        } @catch (NSException *e) {}
 +    });
 +    dispatch_resume(timer);
 +    NSLog(@"[v35bypass] engine status reporter started (500ms)");
-+}
-+
-+// vcam125 globals (offsets from dylib base, found via static reverse)
-+//   g_isLicenseValid  byte @ 0x63ab4
-+//   g_features        uint32 LE @ 0x63ab8
-+//   g_runtime_keys    32 bytes @ 0x63abc
-+//   g_expiry          x64 @ 0x63980 (large value, unix-ish)
-+static void writeVcamIvars(const struct mach_header *mh) {
-+    if (!mh) return;
-+    uint8_t *base = (uint8_t *)mh;
-+    @try {
-+        // [PATCH-v36] 每处偏移先做段边界校验, 防版本偏移错位写崩 (黑屏崩溃循环根因)
-+        uintptr_t p0 = (uintptr_t)base + 0x63ab4;
-+        uintptr_t p1 = (uintptr_t)base + 0x63ab8;
-+        uintptr_t p2 = (uintptr_t)base + 0x63abc;
-+        uintptr_t p3 = (uintptr_t)base + 0x63980;
-+        if (vcam_addrInImage(mh, p0, YES)) *(volatile uint8_t *)(p0) = 1;
-+        if (vcam_addrInImage(mh, p1, YES)) *(volatile uint32_t *)(p1) = 0xFFFFFFFFU;
-+        if (vcam_addrInImage(mh, p2, YES) && vcam_addrInImage(mh, p2 + 32, YES)) {
-+            for (int i = 0; i < 32; i++) ((volatile uint8_t *)p2)[i] = 0x42;
-+        }
-+        if (vcam_addrInImage(mh, p3, YES) && vcam_addrInImage(mh, p3 + 8, YES))
-+            *(volatile uint64_t *)(p3) = 4070908800ULL;
-+        vcam_log2("writeVcamIvars range-checked: %d,%d,%d,%d",
-+              vcam_addrInImage(mh, p0, YES), vcam_addrInImage(mh, p1, YES),
-+              vcam_addrInImage(mh, p2, YES), vcam_addrInImage(mh, p3, YES));
-+    } @catch (NSException *e) {
-+        vcam_log2("writeVcamIvars exception: %@", e);
-+    }
-+}
-+
-+// Periodically re-write ivars to enforce in case vcam125 internal code clears them
-+static void startIvarEnforcer(void) {
-+    static int s_started = 0;
-+    if (s_started) return;
-+    s_started = 1;
-+    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0);
-+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
-+    dispatch_source_set_timer(timer,
-+                              dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
-+                              100 * NSEC_PER_MSEC,  // every 100ms
-+                              10 * NSEC_PER_MSEC);
-+    dispatch_source_set_event_handler(timer, ^{
-+        if (s_vcamMh) writeVcamIvars(s_vcamMh);
-+    });
-+    dispatch_resume(timer);
-+    NSLog(@"[v17bypass] ivar enforcer timer started (100ms interval)");
-+}
-+
-+// v30: 回到 v28 的 MSHookFunction passthrough 路线 (v28 实测 video mode work)
-+// + 加 BWStillImageScaler passthrough (修 photo mode)
-+typedef void (*render_fn_t)(id, SEL, CMSampleBufferRef, id);
-+static render_fn_t orig_photoenc_newImp = NULL;
-+static const struct mach_header *s_mh_for_render = NULL;
-+// vcam125 stash slots:
-+//   0x639d0 = BWNodeOutput.emit orig (保持 vcam125 hook → 3rd party 红色)
-+//   0x639d8 = BWStillImageScalerNode.render orig (v31 用 method_setImpl 重装)
-+//   0x639e0 = BWPhotoEncoderNode.render orig (MSHookFunction passthrough)
-+static void my_photoenc_passthrough(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
-+    if (!s_mh_for_render) return;
-+    // [PATCH-v36] stash slot 读取前校验, 防越界 (读错地址 = 崩)
-+    uintptr_t slot = (uintptr_t)s_mh_for_render + 0x639e0;
-+    if (!vcam_addrInImage(s_mh_for_render, slot, NO)) return;
-+    render_fn_t orig = *(render_fn_t *)slot;
-+    if (orig) orig(self, _cmd, sb, input);
-+}
-+
-+// Apply C-function hooks (gate2 + SecKey) — these only need vcam125 dylib loaded
-+static void applyCHooks(const struct mach_header *mh) {
-+    if (s_didCFunctionHooks) return;
-+    s_didCFunctionHooks = 1;
-+
-+    s_mh_for_render = mh;
-+
-+    // gate2 (vcam125 dylib base + 0xe9f4) — [PATCH-v36] 先段校验再挂
-+    uintptr_t g2 = (uintptr_t)mh + 0xe9f4;
-+    if (!vcam_addrInImage(mh, g2, NO)) {
-+        vcam_log2("gate2 offset 0xe9f4 OUT OF IMAGE — vcam125 version mismatch, skip");
-+    } else {
-+        @try {
-+            MSHookFunction((void *)g2, (void *)my_gate2, (void **)&orig_gate2);
-+            gHookGate2 = 1;
-+            vcam_log2("gate2 @ %p hooked", (void *)g2);
-+        } @catch (NSException *e) {
-+            vcam_log2("gate2 hook FAILED: %@", e);
-+        }
-+    }
-+
-+    // SecKeyVerifySignature framework hook
-+    void *sec_ptr = dlsym(RTLD_DEFAULT, "SecKeyVerifySignature");
-+    if (sec_ptr && !orig_SecKeyVerifySig) {
-+        @try {
-+            MSHookFunction(sec_ptr, (void *)my_SecKeyVerifySig, (void **)&orig_SecKeyVerifySig);
-+            gHookSecKey = 1;
-+            NSLog(@"[v27bypass] SecKeyVerifySignature hooked");
-+        } @catch (NSException *e) {
-+            NSLog(@"[v27bypass] SecKeyVerifySig hook FAILED: %@", e);
-+        }
-+    }
-+
-+    // v31: 只 MSHookFunction BWPhotoEncoder (v28 work 的方式)
-+    // BWStillImageScaler 0xe234 不能 MSHookFunction — 与 0xe240 间距 12B, trampoline 16B 会重叠崩
-+    // 改在 tryObjCSwizzle 延迟 retry 里 method_setImplementation 替换 (vcam125 +load 完成后)
-+    uintptr_t pe = (uintptr_t)mh + 0xe240;   // [PATCH-v36] 先段校验再挂
-+    if (!vcam_addrInImage(mh, pe, NO)) {
-+        vcam_log2("photoenc offset 0xe240 OUT OF IMAGE — skip");
-+    } else {
-+        @try {
-+            MSHookFunction((void *)pe, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
-+            gHookPhotoEnc = 1;
-+            vcam_log2("BWPhotoEncoder.render newImp passthrough hooked");
-+        } @catch (NSException *e) { vcam_log2("photoenc hook fail: %@", e); }
-+    }
 +}
 +
 +// [PATCH-v41] 系统相机管线探测器 — 不依赖 vcameracrack 内部 (千面版无
@@ -2676,107 +2516,15 @@ index 9bc858c..6394d58 100644
 +    });
 +}
 +
-+// Try ObjC class swizzle — called repeatedly until classes appear
-+static void tryObjCSwizzle(int retriesLeft) {
-+    if (s_didObjCSwizzle) return;
-+    Class lc = objc_getClass("LicenseCore");
-+    Class vc = objc_getClass("VCamCore");
-+    if (!lc || !vc) {
-+        if (retriesLeft <= 0) {
-+            vcam_log2("gave up swizzle: lc=%s vc=%s (classes never appeared after 100 retries)",
-+                  lc ? class_getName(lc) : "nil", vc ? class_getName(vc) : "nil");
-+            return;
-+        }
-+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
-+                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
-+                       ^{ tryObjCSwizzle(retriesLeft - 1); });
-+        return;
-+    }
-+
-+    s_didObjCSwizzle = 1;
-+    vcam_log2("*** classes appeared after retry, swizzling now");
-+
-+    swizzle_class(lc, @selector(isLicenseValid),       (IMP)r_isLicenseValid,       "isLicenseValid");
-+    swizzle_class(lc, @selector(loadPersistedLicense), (IMP)r_loadPersistedLicense, "loadPersistedLicense");
-+    swizzle_class(lc, @selector(licenseStatusString),  (IMP)r_licenseStatusString,  "licenseStatusString");
-+    swizzle_class(lc, @selector(features),             (IMP)r_features,             "features");
-+    swizzle_class(lc, @selector(expiryUnix),           (IMP)r_expiryUnix,           "expiryUnix");
-+    swizzle_inst(vc, @selector(isEnabled),             (IMP)r_VC_isEnabled,            "VC.isEnabled");
-+
-+    // v31: 此时 vcam125 +load 已完成 (我们 retry 等 class 出现 = vcam125 init done).
-+    // 从 vcam125 stash slot +0x639d8 读 BWStillImageScaler.render Apple orig, 重装回 class.
-+    // 不能 MSHookFunction 0xe234 因与 0xe240 trampoline 重叠.
-+    if (s_mh_for_render) {
-+        @try {
-+            // [PATCH-v36] stash slot 读取前校验
-+            uintptr_t slot = (uintptr_t)s_mh_for_render + 0x639d8;
-+            IMP stillscale_orig = vcam_addrInImage(s_mh_for_render, slot, NO)
-+                ? *(IMP *)slot : NULL;
-+            Class scaleCls = objc_getClass("BWStillImageScalerNode");
-+            if (scaleCls && stillscale_orig) {
-+                Method m = class_getInstanceMethod(scaleCls, sel_registerName("renderSampleBuffer:forInput:"));
-+                if (m) {
-+                    method_setImplementation(m, stillscale_orig);
-+                    vcam_log2("BWStillImageScalerNode.render restored to Apple orig %p", stillscale_orig);
-+                }
-+            }
-+        } @catch (NSException *e) { vcam_log2("stillscale restore err: %@", e); }
-+    }
-+    // 我们替换了 renderReplacement → 强制 emit hook 调我们的 (vcam125 原版崩)
-+    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:), (IMP)r_VC_renderReplacementToPixelBuffer, "VC.renderReplPB");
-+    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:photoCompensation:), (IMP)r_VC_renderReplacementToPixelBuffer_photoCompensation, "VC.renderReplPB:photo");
-+    // v21: 重新加 hasReplacementFrame=YES, 强制 emit hook 调到我们的 renderReplacement
-+    // (v18-v20 移除让 emit hook 在 step 6 bail, 我们 hook 永远没机会跑 → chicken-egg
-+    // LVP 永远不解码). 现在我们的 renderReplacement 已经替换 vcam125 原版 → 调进来不会崩.
-+    swizzle_inst(vc, @selector(hasReplacementFrame), (IMP)r_VC_hasReplacementFrame, "VC.hasReplacementFrame");
-+    vcam_log2("*** ObjC swizzle complete");
-+}
-+
++// [PATCH-v42] 系统类 hook 轮询 (见上方 v42_hookSystem) — 不再依赖 vcameracrack
++// onImageLoad: 只保留 image 枚举诊断 (引擎激活已不依赖 dylib 加载时机)
 +static void onImageLoad(const struct mach_header *mh, intptr_t slide) {
 +    Dl_info info;
 +    if (dladdr((const void *)mh, &info) == 0) return;
 +    if (!info.dli_fname) return;
-+    // [PATCH-v36] 诊断: 打印所有含 vcam 的加载 image; 匹配放宽到 "vcam" 子串
-+    // (千面改名/大小写变化导致 strstr("vcameracrack") 静默失效 = 全功能不生效根因之一)
 +    if (strstr(info.dli_fname, "vcam")) {
 +        vcam_log2("vcam image load: %s", info.dli_fname);
 +    }
-+    if (!strstr(info.dli_fname, "vcameracrack")) {
-+        if (strstr(info.dli_fname, "vcam")) {
-+            vcam_log2("image contains 'vcam' but not 'vcameracrack' — checking segments");
-+            // 校验关键偏移, 全通过则视为目标 (防止改名后静默失效)
-+            BOOL ok = vcam_addrInImage(mh, (uintptr_t)mh + 0x63ab4, YES)
-+                   && vcam_addrInImage(mh, (uintptr_t)mh + 0xe9f4, NO)
-+                   && vcam_addrInImage(mh, (uintptr_t)mh + 0xe240, NO);
-+            if (ok) vcam_log2("segment offsets MATCH — treat as vcameracrack");
-+            else { vcam_log2("offsets mismatch, skip"); return; }
-+        } else {
-+            return;
-+        }
-+    }
-+
-+    vcam_log2("*** vcameracrack loaded at %p slide=0x%lx path=%s",
-+              mh, (unsigned long)slide, info.dli_fname);
-+    s_vcamMh = mh;
-+    s_vcamDylibName[0] = 0;
-+    strncpy(s_vcamDylibName, info.dli_fname, sizeof(s_vcamDylibName) - 1);
-+    // [PATCH-v39] 状态回写由真实引擎进程启动 (千面在 com.apple.lskdd 进程,
-+    // 非 mediaserverd — 否则 status 文件永远假 0/5 或缺失)
-+    v35_startStatusReporter();
-+
-+    // C-function hooks immediately
-+    applyCHooks(mh);
-+
-+    // Write ivars NOW (before vcam125 +load tries to verify license)
-+    writeVcamIvars(mh);
-+
-+    // Start periodic re-write timer to enforce against vcam125's own clearing
-+    startIvarEnforcer();
-+
-+    // ObjC class hooks deferred via retry
-+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-+        tryObjCSwizzle(100);
-+    });
 +}
 +
 +// ============== ctor — register dyld callback ==============
@@ -2793,17 +2541,13 @@ index 9bc858c..6394d58 100644
 +    _dyld_register_func_for_add_image(onImageLoad);
 +    vcam_log2("dyld add_image callback registered");
 +
-+    // ALSO start an independent retry loop in case dyld callback never sees vcameracrack
-+    // (already-loaded edge case — though dyld should fire for already-loaded images)
++    // [PATCH-v42] 系统类 hook 轮询: 类可能相机激活时才出现 → 持续重试不放弃
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
 +                   ^{ tryObjCSwizzle(100); });
-+    // [PATCH-v41] 系统相机管线探测 (mediaserverd/SpringBoard/任意进程): 5s/15s/30s 三次
++    // [PATCH-v41] 系统相机管线探测 (mediaserverd/SpringBoard/任意进程): 5s/15s 两次
 +    v41_startProbe();
 +    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
-+    // [PATCH-v35/v39/v40] 状态回写由「匹配到 vcameracrack 的进程」启动 (见 onImageLoad),
-+    // v40: plist Filter 已移除 → 全进程注入, 引擎在任意含 vcameracrack 的进程自适应激活
-+    // (千面实测只加载于其自身 filter 的 App 进程; 我们不再猜目标进程)
 +    // [PATCH-v33] 视频读取器锁初始化
 +    if (!gLockA) gLockA = [NSLock new];
 +    vcam_readControls(); // 启动即同步一次 controls
@@ -2827,21 +2571,21 @@ index 9bc858c..6394d58 100644
 +                    if (gate2)    *gate2    = [p[2] intValue];
 +                    if (seckey)   *seckey   = [p[3] intValue];
 +                    if (photoenc) *photoenc = [p[4] intValue];
-+                    return ([p[0] intValue] && [p[1] intValue] && [p[2] intValue] && [p[3] intValue]) ? YES : NO;
++                    return ([p[0] intValue]) ? YES : NO;
 +                }
 +            }
 +        }
 +    } @catch (NSException *e) {}
 +    // 回退: 本进程 globals (非引擎进程时基本全 0)
 +    if (swizzled) *swizzled = s_didObjCSwizzle;
-+    if (cfhooks)  *cfhooks  = s_didCFunctionHooks;
-+    if (gate2)    *gate2    = gHookGate2;
-+    if (seckey)   *seckey   = gHookSecKey;
-+    if (photoenc) *photoenc = gHookPhotoEnc;
-+    return (s_didObjCSwizzle && s_didCFunctionHooks && gHookGate2 && gHookSecKey) ? YES : NO;
++    if (cfhooks)  *cfhooks  = gHookGate2;
++    if (gate2)    *gate2    = gHookSecKey;
++    if (seckey)   *seckey   = gHookPhotoEnc;
++    if (photoenc) *photoenc = 0;
++    return s_didObjCSwizzle ? YES : NO;
 +}
 +
-+// [PATCH-v36] 引擎是否匹配到 vcam dylib (跨进程: 读 status 文件第 11 字段)
++// [PATCH-v36] 引擎是否激活 (跨进程: 读 status 文件第 11 字段 = 系统 hook 完成)
 +int vcam_bypass_engine_detected(void) {
 +    @try {
 +        NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:VCAM_STATUS error:nil];
@@ -2854,7 +2598,7 @@ index 9bc858c..6394d58 100644
 +            }
 +        }
 +    } @catch (NSException *e) {}
-+    return s_vcamMh ? 1 : 0;
++    return s_didSystemHook ? 1 : 0;
 +}
 +BOOL vcam_bypass_set_replace(BOOL on) {
 +    gReplaceEnabled = on ? 1 : 0;
