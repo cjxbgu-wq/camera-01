@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v1.2.4 (2026-08-14)
+
+### 注入机制修正 (v44, 依据参考资料: 千面已运行项目)
+- **根因**: v42(TweakInject 布局) 的 App List 通道不注入 daemon → mediaserverd 永无注入;
+  v43(DynamicPatches) 走错通道 (PatchLoader 不覆盖系统进程) → 双 patch 全无效 + SB UI 消失.
+- **v44 打包** (与千面完全一致):
+  - rootless scheme → dylib+plist 装 `/var/jb/Library/MobileSubstrate/DynamicLibraries/`
+  - plist Filter = Bundles+Executables 双键 (com.apple.mediaserverd/com.apple.springboard)
+  - `.roothidepatch` **文本文件** (内容 `/usr/lib/DynamicPatches/AutoPatches.dylib`)
+  - mediaserverd 在 Bootstrap resignList.plist 白名单内 (已重签名) → TweakLoader 按 filter 注入
+- 恢复 `-lsubstrate` + Depends mobilesubstrate (与千面 control 一致)
+
 ## v1.2.3 (2026-08-14)
 
 ### 重写 (替换核心 = 千面同路线: 直接 hook 系统相机管线)
