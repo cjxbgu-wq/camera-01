@@ -1219,10 +1219,10 @@ index 4fe9530..f50085d 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..affe13f 100644
+index 9bc858c..ad6ef07 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,955 @@
+@@ -1,370 +1,1007 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -1663,6 +1663,7 @@ index 9bc858c..affe13f 100644
 +
 +// ===== [PATCH-v34] 动作分段引擎 (VCActionSystem 移植 · 独立模块) =====
 +#define VCAM_ACTIONS VCAM_DIR @"/actions.json"
++#define VCAM_STATUS VCAM_DIR @"/status"   // [PATCH-v35] 引擎状态回写文件 (UI 跨进程读取)
 +
 +static char gActionID[64] = "";
 +static int gActionStop = 0;         // 一次性停止信号 (UI 写 1, 引擎读到即复位)
@@ -2062,6 +2063,35 @@ index 9bc858c..affe13f 100644
 +}
 +
 +
++// ===== [PATCH-v35] 引擎状态回写文件 (跨进程检测修复: UI 读 mediaserverd 真实状态) =====
++// 原因: vcam_bypass_status 在 SpringBoard 读本进程 globals, 永远 0/5 → 面板误导.
++// 现在 mediaserverd 引擎每 0.5s 写 status 文件, UI 读文件得真实值.
++int vcam_bypass_source_mode(void);  // 前向声明 (定义见文件后部 extern "C" 块)
++static void v35_startStatusReporter(void) {
++    static int s_started = 0;
++    if (s_started) return;
++    s_started = 1;
++    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
++    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
++    dispatch_source_set_timer(timer,
++                              dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
++                              500 * NSEC_PER_MSEC,
++                              100 * NSEC_PER_MSEC);
++    dispatch_source_set_event_handler(timer, ^{
++        @try {
++            NSFileManager *fm = [NSFileManager defaultManager];
++            [fm createDirectoryAtPath:VCAM_DIR withIntermediateDirectories:YES attributes:nil error:nil];
++            NSString *line = [NSString stringWithFormat:@"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
++                s_didObjCSwizzle, s_didCFunctionHooks, gHookGate2, gHookSecKey, gHookPhotoEnc,
++                gReplaceEnabled, gColorInject, vcam_bypass_source_mode(), gVideoPaused,
++                gActionActive];
++            [line writeToFile:VCAM_STATUS atomically:YES encoding:NSUTF8StringEncoding error:nil];
++        } @catch (NSException *e) {}
++    });
++    dispatch_resume(timer);
++    NSLog(@"[v35bypass] engine status reporter started (500ms)");
++}
++
 +// ============== Replacement IMPs ==============
 +
 +static BOOL r_isLicenseValid(id self, SEL _cmd) { return YES; }
@@ -2428,6 +2458,8 @@ index 9bc858c..affe13f 100644
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
 +                   ^{ tryObjCSwizzle(100); });
 +    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
++    // [PATCH-v35] 状态回写只跑引擎进程 (SpringBoard 会覆盖文件, 故排除)
++    if ([proc isEqualToString:@"mediaserverd"]) v35_startStatusReporter();
 +    // [PATCH-v33] 视频读取器锁初始化
 +    if (!gLockA) gLockA = [NSLock new];
 +    vcam_readControls(); // 启动即同步一次 controls
@@ -2437,6 +2469,26 @@ index 9bc858c..affe13f 100644
 +extern "C" {
 +#endif
 +BOOL vcam_bypass_status(int *swizzled, int *cfhooks, int *gate2, int *seckey, int *photoenc) {
++    // [PATCH-v35] 优先读 mediaserverd 引擎回写的 status 文件 (真实状态)
++    @try {
++        NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:VCAM_STATUS error:nil];
++        if (attr) {
++            NSTimeInterval age = CACurrentMediaTime() - [attr[NSFileModificationDate] timeIntervalSince1970];
++            if (age < 2.0) {  // 文件新鲜 → 引擎活着, 用引擎值
++                NSString *content = [NSString stringWithContentsOfFile:VCAM_STATUS encoding:NSUTF8StringEncoding error:nil];
++                NSArray *p = [content componentsSeparatedByString:@","];
++                if (p.count >= 5) {
++                    if (swizzled) *swizzled = [p[0] intValue];
++                    if (cfhooks)  *cfhooks  = [p[1] intValue];
++                    if (gate2)    *gate2    = [p[2] intValue];
++                    if (seckey)   *seckey   = [p[3] intValue];
++                    if (photoenc) *photoenc = [p[4] intValue];
++                    return ([p[0] intValue] && [p[1] intValue] && [p[2] intValue] && [p[3] intValue]) ? YES : NO;
++                }
++            }
++        }
++    } @catch (NSException *e) {}
++    // 回退: 本进程 globals (非引擎进程时基本全 0)
 +    if (swizzled) *swizzled = s_didObjCSwizzle;
 +    if (cfhooks)  *cfhooks  = s_didCFunctionHooks;
 +    if (gate2)    *gate2    = gHookGate2;

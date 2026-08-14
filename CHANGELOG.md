@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.1.7 (2026-08-14)
+
+### 修复
+- fix: 状态检测跨进程失效 — STATUS 页 5 项 hook 状态原先读 SpringBoard 本进程
+  globals (SpringBoard 永不加载 vcameracrack → 永远 0/5, 误导排查)。
+  新增 v35 引擎状态回写: mediaserverd 每 0.5s 写
+  `/var/jb/var/mobile/Library/vcamplus/status`
+  `swizzled,cfhooks,gate2,seckey,photoenc,replace,colorInject,sourceMode,pause,actionActive`,
+  `vcam_bypass_status` 优先读新鲜 (<2s) 状态文件, 无文件回退本进程值。
+  真机排查时 STATUS 页现可真实反映引擎挂载情况。
+
 ## v1.1.6 (2026-08-12)
 
 ### 功能
