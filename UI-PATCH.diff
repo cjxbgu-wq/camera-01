@@ -66,10 +66,10 @@ index 3fdd407..c938436 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..a73cf2c 100644
+index 4fe9530..49eeeca 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
-@@ -1,24 +1,46 @@
+@@ -1,24 +1,51 @@
  //
 -//  VCamBypassUI.m — VCam Pro Bypass UI (v32)
 +//  VCamBypassUI.m — VCam Pro Bypass UI (v33 透明玻璃重构)
@@ -88,12 +88,17 @@ index 4fe9530..a73cf2c 100644
 -#define VCB_LINE [UIColor colorWithRed:0.23 green:0.28 blue:0.40 alpha:1.0]
 -#define VCB_GREEN [UIColor colorWithRed:0.40 green:0.73 blue:0.42 alpha:1.0]
 -#define VCB_AMBER [UIColor colorWithRed:1.00 green:0.72 blue:0.30 alpha:1.0]
-+// [PATCH-v41] RootHide 官方 API: jbroot() 替代硬编码 /var/jb (弱引用,
-+// 非 RootHide 环境无 jbroot 符号 → 自动回退 /var/jb 前缀)
-+extern const char *jbroot(const char *path) __attribute__((weak_import));
++// [PATCH-v41] RootHide 官方 API: jbroot() 替代硬编码 /var/jb. 运行期 dlsym 解析
++// (weak_import 对非系统符号无效 → dlsym, 非 RootHide 环境无 jbroot 符号 → 回退 /var/jb)
++#import <dlfcn.h>
++static const char *(*jbroot_fn)(const char *) = NULL;
 +static NSString *vcb_jbPath(NSString *sub) {
-+    if (jbroot != NULL) {
-+        const char *p = jbroot(sub.UTF8String);
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++        jbroot_fn = (const char *(*)(const char *))dlsym(RTLD_DEFAULT, "jbroot");
++    });
++    if (jbroot_fn) {
++        const char *p = jbroot_fn(sub.UTF8String);
 +        if (p) return [NSString stringWithUTF8String:p];
 +    }
 +    return [@"/var/jb" stringByAppendingPathComponent:sub];
@@ -125,7 +130,7 @@ index 4fe9530..a73cf2c 100644
  void vcToggleMenu(void);
  void vcHideMenu(void);
  void vcHideBall(void);
-@@ -33,6 +55,41 @@ static NSTimeInterval sUpT  = 0;
+@@ -33,6 +60,41 @@ static NSTimeInterval sUpT  = 0;
  static NSTimeInterval sDnT  = 0;
  static BOOL sInstalled      = NO;
  
@@ -167,7 +172,7 @@ index 4fe9530..a73cf2c 100644
  static UIColor *vcStateColor(void) {
      int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
      vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
-@@ -85,6 +142,104 @@ static UIColor *vcStateColor(void) {
+@@ -85,6 +147,104 @@ static UIColor *vcStateColor(void) {
  - (void)onTap { vcToggleMenu(); }
  @end
  
@@ -272,7 +277,7 @@ index 4fe9530..a73cf2c 100644
  // ============================================================
  #pragma mark - 菜单面板
  // ============================================================
-@@ -93,43 +248,60 @@ static uint32_t vcColorTable[] = {
+@@ -93,43 +253,60 @@ static uint32_t vcColorTable[] = {
      0xFFFF0000, 0xFF00FF00, 0xFF0000FF,
      0xFFFFFF00, 0xFF00FFFF, 0xFFFFFFFF
  };
@@ -350,7 +355,7 @@ index 4fe9530..a73cf2c 100644
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(7, 2, w - 14, 9)];
      lab.text = l;
      lab.font = [UIFont systemFontOfSize:7];
-@@ -144,45 +316,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -144,45 +321,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
      [host addSubview:box];
      return valL;
  }
@@ -435,7 +440,7 @@ index 4fe9530..a73cf2c 100644
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +389,722 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +394,722 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
@@ -1286,7 +1291,7 @@ index 4fe9530..a73cf2c 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1181,15 @@ void vcToggleMenu(void) {
+@@ -499,21 +1186,15 @@ void vcToggleMenu(void) {
  }
  
  // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
@@ -1311,7 +1316,7 @@ index 4fe9530..a73cf2c 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -547,16 +1223,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1228,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
@@ -1340,10 +1345,10 @@ index 4fe9530..a73cf2c 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..e6a160b 100644
+index 9bc858c..b45f3e4 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1245 @@
+@@ -1,370 +1,1250 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -1742,12 +1747,17 @@ index 9bc858c..e6a160b 100644
 +#import <fcntl.h>
 +#import <unistd.h>
 +
-+// [PATCH-v41] RootHide 官方 API: jbroot() 替代硬编码 /var/jb (弱引用,
-+// 非 RootHide 环境无 jbroot 符号 → 自动回退 /var/jb 前缀)
-+extern const char *jbroot(const char *path) __attribute__((weak_import));
++// [PATCH-v41] RootHide 官方 API: jbroot() 替代硬编码 /var/jb. 运行期 dlsym 解析
++// (weak_import 对非系统符号无效, arm64 链接会强制解析 → 改 dlsym, 非 RootHide 环境
++// 无 jbroot 符号 → 自动回退 /var/jb 前缀)
++static const char *(*jbroot_fn)(const char *) = NULL;
 +static NSString *vcam_jbPath(NSString *sub) {
-+    if (jbroot != NULL) {
-+        const char *p = jbroot(sub.UTF8String);
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++        jbroot_fn = (const char *(*)(const char *))dlsym(RTLD_DEFAULT, "jbroot");
++    });
++    if (jbroot_fn) {
++        const char *p = jbroot_fn(sub.UTF8String);
 +        if (p) return [NSString stringWithUTF8String:p];
 +    }
 +    return [@"/var/jb" stringByAppendingPathComponent:sub];
