@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## v1.1.9 (2026-08-14)
+
+### 功能
+- feat: 软件内完整运行日志 (v37) — 之前日志只有 SpringBoard 进程内存缓冲,
+  mediaserverd 引擎的关键事件 (vcameracrack 匹配/hook 结果/渲染错误/动作引擎)
+  面板里看不到. v37:
+  - 统一落盘: 所有 vcam_log2 事件 (引擎+面板) 追加写
+    `/var/jb/var/mobile/Library/vcamplus/engine.log` (限 300 行, 带进程名前缀),
+    帧级错误 (渲染 NULL/读取器失败/VT 会话失败) 走 5s 限频防刷爆;
+    引擎关键 NSLog 全部接入落盘日志.
+  - 面板新增第 4 页签「日志」: 实时查看完整运行日志 (engine.log 全文 + 面板
+    内存缓冲合并显示), 「⟳ 刷新日志」「复制日志」(剪贴板, 可发回分析)
+    「清空日志」.
+  - 新接口 vcam_bypass_engine_log / vcam_bypass_clear_log.
+
 ## v1.1.8 (2026-08-14)
 
 ### 修复

@@ -20,18 +20,20 @@ index 2872389..ef36435 100644
  
  include $(THEOS_MAKE_PATH)/tweak.mk
 diff --git a/Modules/VCamBypassUI.h b/Modules/VCamBypassUI.h
-index 3fdd407..2a815fa 100644
+index 3fdd407..c938436 100644
 --- a/Modules/VCamBypassUI.h
 +++ b/Modules/VCamBypassUI.h
-@@ -11,6 +11,7 @@ extern "C" {
+@@ -11,6 +11,9 @@ extern "C" {
  
  // ---- 状态读取 (由 UI-PATCH.diff 在 Tweak.xm 中实现, 本模块只声明) ----
  BOOL vcam_bypass_status(int *swizzled, int *cfhooks, int *gate2, int *seckey, int *photoenc);
 +int  vcam_bypass_engine_detected(void);  // [PATCH-v36] 引擎是否匹配到 vcam dylib (0/1)
++NSString *vcam_bypass_engine_log(void);  // [PATCH-v37] 完整运行日志 (engine.log 全文)
++void vcam_bypass_clear_log(void);        // [PATCH-v37] 清空日志文件
  
  // ---- 控制 ----
  BOOL vcam_bypass_set_replace(BOOL on);          // 画面替换总开关
-@@ -21,6 +22,21 @@ NSString *vcam_bypass_logs(void);               // 内存日志导出
+@@ -21,6 +24,21 @@ NSString *vcam_bypass_logs(void);               // 内存日志导出
  int  vcam_bypass_get_replace(void);             // 读当前开关
  int  vcam_bypass_get_camera_pass(void);
  
@@ -54,7 +56,7 @@ index 3fdd407..2a815fa 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..93e1e98 100644
+index 4fe9530..4655fd2 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,29 @@
@@ -96,7 +98,7 @@ index 4fe9530..93e1e98 100644
  void vcToggleMenu(void);
  void vcHideMenu(void);
  void vcHideBall(void);
-@@ -33,6 +38,38 @@ static NSTimeInterval sUpT  = 0;
+@@ -33,6 +38,41 @@ static NSTimeInterval sUpT  = 0;
  static NSTimeInterval sDnT  = 0;
  static BOOL sInstalled      = NO;
  
@@ -113,6 +115,8 @@ index 4fe9530..93e1e98 100644
 +@interface VCMenuVC : UIViewController <UIScrollViewDelegate> {
 +    UIScrollView *_pages;
 +    UIButton *_tab1, *_tab2, *_tab3, *_tab4, *_tabAct;
++    UIButton *_tabLog;              // [PATCH-v37] 第 4 页签「日志」
++    UITextView *_logView;           // [PATCH-v37] 日志页正文
 +    UIView *_colorDot;
 +    UIView *_barFill;
 +    UIButton *_btnPause;
@@ -130,12 +134,13 @@ index 4fe9530..93e1e98 100644
 +}
 +- (void)refreshStatus;                 // UIHlp (文件更早位置) 调用, 需在 @implementation 前可见
 ++ (void)refreshIfVisible;
++- (void)refreshLogs;                   // [PATCH-v37] 日志页刷新
 +@end
 +
  static UIColor *vcStateColor(void) {
      int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
      vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
-@@ -85,6 +122,104 @@ static UIColor *vcStateColor(void) {
+@@ -85,6 +125,104 @@ static UIColor *vcStateColor(void) {
  - (void)onTap { vcToggleMenu(); }
  @end
  
@@ -240,7 +245,7 @@ index 4fe9530..93e1e98 100644
  // ============================================================
  #pragma mark - 菜单面板
  // ============================================================
-@@ -93,43 +228,60 @@ static uint32_t vcColorTable[] = {
+@@ -93,43 +231,60 @@ static uint32_t vcColorTable[] = {
      0xFFFF0000, 0xFF00FF00, 0xFF0000FF,
      0xFFFFFF00, 0xFF00FFFF, 0xFFFFFFFF
  };
@@ -318,7 +323,7 @@ index 4fe9530..93e1e98 100644
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(7, 2, w - 14, 9)];
      lab.text = l;
      lab.font = [UIFont systemFontOfSize:7];
-@@ -144,45 +296,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -144,45 +299,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
      [host addSubview:box];
      return valL;
  }
@@ -391,19 +396,19 @@ index 4fe9530..93e1e98 100644
 +        b.transform = CGAffineTransformMakeScale(0.9, 0.9);
 +        b.alpha = 0.7;
 +    } completion:nil];
- }
++}
 +- (void)btnUp:(UIButton *)b {
 +    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
 +        b.transform = CGAffineTransformIdentity;
 +        b.alpha = 1.0;
 +    } completion:nil];
-+}
+ }
 +
 +// ---- 状态行 (STATUS 页) ----
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +369,645 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +372,712 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
@@ -488,24 +493,28 @@ index 4fe9530..93e1e98 100644
 -    _tab2 = [self mkTab:@"STATUS" x:84 sel:NO tag:2];
 -    _tab3 = [self mkTab:@"FUNC" x:20 sel:NO tag:1];
 -    _tab4 = [self mkTab:@"STATUS" x:84 sel:YES tag:2];
-+    // 页签 + 页点 (v34: 三页 功能/状态/动作)
++    // 页签 + 页点 (v34: 三页 功能/状态/动作; v37: 第 4 页 日志)
 +    _tab1 = [self mkTab:@"功能" x:20 sel:YES tag:1];
 +    _tab2 = [self mkTab:@"状态" x:84 sel:NO tag:2];
 +    _tab3 = [self mkTab:@"功能" x:20 sel:NO tag:1];
 +    _tab4 = [self mkTab:@"状态" x:84 sel:YES tag:2];
 +    _tabAct = [self mkTab:@"动作" x:148 sel:NO tag:3];
++    _tabLog = [self mkTab:@"日志" x:212 sel:NO tag:4];   // [PATCH-v37]
      [card addSubview:_tab1];
      [card addSubview:_tab2];
      [card addSubview:_tab3];
      [card addSubview:_tab4];
 +    [card addSubview:_tabAct];
++    [card addSubview:_tabLog];
 +    // 页点
-+    UIView *d1 = [[UIView alloc] initWithFrame:CGRectMake(cw - 40, 53, 8, 8)];
++    UIView *d1 = [[UIView alloc] initWithFrame:CGRectMake(cw - 55, 53, 8, 8)];
 +    d1.layer.cornerRadius = 4; d1.backgroundColor = VCB_CYAN; [card addSubview:d1];
-+    UIView *d2 = [[UIView alloc] initWithFrame:CGRectMake(cw - 25, 53, 8, 8)];
++    UIView *d2 = [[UIView alloc] initWithFrame:CGRectMake(cw - 40, 53, 8, 8)];
 +    d2.layer.cornerRadius = 4; d2.backgroundColor = VCB_LINE; [card addSubview:d2];
-+    UIView *d3 = [[UIView alloc] initWithFrame:CGRectMake(cw - 10, 53, 8, 8)];
++    UIView *d3 = [[UIView alloc] initWithFrame:CGRectMake(cw - 25, 53, 8, 8)];
 +    d3.layer.cornerRadius = 4; d3.backgroundColor = VCB_LINE; [card addSubview:d3];
++    UIView *d4 = [[UIView alloc] initWithFrame:CGRectMake(cw - 10, 53, 8, 8)];  // [PATCH-v37]
++    d4.layer.cornerRadius = 4; d4.backgroundColor = VCB_LINE; [card addSubview:d4];
  
 -    _pages = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 54, cw, 424)];
 +    _pages = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 84, cw, 394)];
@@ -514,7 +523,7 @@ index 4fe9530..93e1e98 100644
      _pages.bounces = NO;
      _pages.delegate = self;
 -    _pages.contentSize = CGSizeMake(cw * 2, 424);
-+    _pages.contentSize = CGSizeMake(cw * 3, 394);
++    _pages.contentSize = CGSizeMake(cw * 4, 394);   // [PATCH-v37] 4 页
      [card addSubview:_pages];
  
 -    UIView *pg1 = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cw, 424)];
@@ -572,6 +581,35 @@ index 4fe9530..93e1e98 100644
 +        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
 +    [pg3 addSubview:actAdd]; [pg3 addSubview:actStop];
 +    [_pages addSubview:pg3];
+ 
++    // ================= LOG 页 (v37: 完整运行日志, engine.log 落盘可见) =================
++    UIView *pg4 = [[UIView alloc] initWithFrame:CGRectMake(cw * 3, 0, cw, 394)];
++    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(20, 6, cw - 40, 13)];
++    logTitle.text = @"运行日志 · 引擎(mediaserverd)+面板 关键事件";
++    logTitle.font = [UIFont boldSystemFontOfSize:9];
++    logTitle.textColor = VCB_TXT;
++    [pg4 addSubview:logTitle];
++    _logView = [[UITextView alloc] initWithFrame:CGRectMake(16, 24, cw - 32, 296)];
++    _logView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
++    _logView.layer.cornerRadius = 10;
++    _logView.textColor = [UIColor colorWithRed:0.55 green:0.95 blue:0.85 alpha:1];
++    _logView.font = [UIFont fontWithName:@"Menlo" size:8];
++    _logView.editable = NO;
++    _logView.selectable = YES;
++    _logView.showsVerticalScrollIndicator = YES;
++    [pg4 addSubview:_logView];
++    CGFloat lw2 = (cw - 40 - 8) / 2;
++    UIButton *logRefresh = [self mkBtn:@"⟳ 刷新日志" tag:30 x:20 y:330 w:lw2 h:38 font:10
++        from:[UIColor colorWithRed:0.20 green:0.83 blue:0.60 alpha:1]
++        to:[UIColor colorWithRed:0.02 green:0.59 blue:0.41 alpha:1]];
++    UIButton *logCopy = [self mkBtn:@"复制日志" tag:31 x:20 + lw2 + 8 y:330 w:lw2 h:38 font:10
++        from:[UIColor colorWithRed:0.38 green:0.65 blue:0.98 alpha:1]
++        to:[UIColor colorWithRed:0.15 green:0.39 blue:0.92 alpha:1]];
++    UIButton *logClear = [self mkBtn:@"清空日志" tag:32 x:20 y:374 w:cw - 40 h:34 font:10
++        from:[UIColor colorWithRed:0.98 green:0.44 blue:0.52 alpha:1]
++        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
++    [pg4 addSubview:logRefresh]; [pg4 addSubview:logCopy]; [pg4 addSubview:logClear];
++    [_pages addSubview:pg4];
 +
 +    // ================= FUNC 页: 2x3 网格功能键 (等宽等距) =================
 +    CGFloat bw = (cw - 40 - 12) / 2;
@@ -601,7 +639,7 @@ index 4fe9530..93e1e98 100644
 +    [pg1 addSubview:b1]; [pg1 addSubview:b2];
 +    [pg1 addSubview:b3]; [pg1 addSubview:b4];
 +    [pg1 addSubview:_btnPause]; [pg1 addSubview:_btnReplace];
- 
++
 +    // 6 色块 3x2 (图案颜色)
      for (int i = 0; i < 6; i++) {
          UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -719,7 +757,37 @@ index 4fe9530..93e1e98 100644
 +    }
 +    if (tag == 10) { [self onAddAction]; return; }          // v34 添加动作
 +    if (tag == 11) { [self onActionStop]; return; }         // v34 停止动作
++    if (tag == 30) { [self refreshLogs]; return; }          // v37 刷新日志
++    if (tag == 31) {                                         // v37 复制日志
++        NSString *t = _logView.text;
++        if (t.length) {
++            UIPasteboard *pb = [UIPasteboard generalPasteboard];
++            pb.string = t;
++            UIAlertController *ok = [UIAlertController alertControllerWithTitle:@"已复制到剪贴板"
++                message:[NSString stringWithFormat:@"%lu 行日志", (unsigned long)[t componentsSeparatedByString:@"\n"].count]
++                preferredStyle:UIAlertControllerStyleAlert];
++            [ok addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
++            [self presentViewController:ok animated:YES completion:nil];
++        }
++        return;
++    }
++    if (tag == 32) { vcam_bypass_clear_log(); [self refreshLogs]; return; }  // v37 清空日志
 +    if (tag >= 100 && tag < 106) { [self onColor:(int)(tag - 100)]; }
++}
++
++// [PATCH-v37] 日志页刷新: engine.log 全文 + 本进程内存缓冲
++- (void)refreshLogs {
++    NSString *engine = vcam_bypass_engine_log();
++    NSString *local = vcam_bypass_logs();
++    NSMutableString *m = [NSMutableString new];
++    [m appendString:@"━━━ 完整运行日志 (engine.log) ━━━\n"];
++    [m appendString:engine ?: @"(无)"];
++    if (local.length) {
++        [m appendString:@"\n━━━ 面板内存日志 ━━━\n"];
++        [m appendString:local];
++    }
++    _logView.text = m;
++    [_logView scrollRangeToVisible:NSMakeRange(MAX(0, (NSInteger)m.length - 1), 0)];
 +}
 +
 +// 选择视频: PHPicker 相册 (参考工程 tag1)
@@ -807,6 +875,7 @@ index 4fe9530..93e1e98 100644
  - (void)viewWillAppear:(BOOL)a {
      [super viewWillAppear:a];
      [self refreshStatus];
++    [self refreshLogs];   // [PATCH-v37]
  }
 +
 +// ---- 状态刷新 ----
@@ -918,7 +987,7 @@ index 4fe9530..93e1e98 100644
 -    [_tab2 setTitleColor:s2 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
 -    [_tab3 setTitleColor:s1 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
 -    [_tab4 setTitleColor:s2 ? VCB_BG : VCB_GRAY forState:UIControlStateNormal];
-+    BOOL s1 = (pg == 1), s2 = (pg == 2), s3 = (pg == 3);
++    BOOL s1 = (pg == 1), s2 = (pg == 2), s3 = (pg == 3), s4 = (pg == 4);   // [PATCH-v37]
 +    UIColor *sel = [UIColor colorWithRed:0.91 green:0.96 blue:1.0 alpha:1];
 +    UIColor *unsel = [UIColor colorWithWhite:1 alpha:0.08];
 +    _tab1.backgroundColor = s1 ? sel : unsel;
@@ -926,11 +995,14 @@ index 4fe9530..93e1e98 100644
 +    _tab3.backgroundColor = s1 ? sel : unsel;
 +    _tab4.backgroundColor = s2 ? sel : unsel;
 +    _tabAct.backgroundColor = s3 ? sel : unsel;
++    _tabLog.backgroundColor = s4 ? sel : unsel;   // [PATCH-v37]
 +    [_tab1 setTitleColor:s1 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
 +    [_tab2 setTitleColor:s2 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
 +    [_tab3 setTitleColor:s1 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
 +    [_tab4 setTitleColor:s2 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
 +    [_tabAct setTitleColor:s3 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];
++    [_tabLog setTitleColor:s4 ? [UIColor colorWithRed:0.08 green:0.09 blue:0.18 alpha:1] : VCB_GRAY forState:UIControlStateNormal];   // [PATCH-v37]
++    if (s4) [self refreshLogs];   // [PATCH-v37] 切到日志页自动刷新
  }
  - (void)scrollViewDidEndDecelerating:(UIScrollView *)sv {
      NSInteger pg = (NSInteger)(sv.contentOffset.x / MAX(sv.frame.size.width, 1)) + 1;
@@ -1177,7 +1249,7 @@ index 4fe9530..93e1e98 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1084,15 @@ void vcToggleMenu(void) {
+@@ -499,21 +1154,15 @@ void vcToggleMenu(void) {
  }
  
  // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
@@ -1202,7 +1274,7 @@ index 4fe9530..93e1e98 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -547,16 +1126,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1196,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
@@ -1231,10 +1303,10 @@ index 4fe9530..93e1e98 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..59f4998 100644
+index 9bc858c..36a1351 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1093 @@
+@@ -1,370 +1,1161 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -1666,6 +1738,24 @@ index 9bc858c..59f4998 100644
 +static int gHookGate2 = 0, gHookSecKey = 0, gHookPhotoEnc = 0; // 逐项 hook 成功标志
 +static char gLogBuf[64][192];
 +static volatile int gLogHead = 0, gLogCount = 0;
++// [PATCH-v37] 统一日志落盘: 所有进程 (mediaserverd 引擎 + SpringBoard UI) 的关键事件
++// 追加写 engine.log (限 300 行), 面板「日志」页读取 → 软件内可见完整运行日记.
++static void vcam_persistLog(const char *line) {
++    @try {
++        NSFileManager *fm = [NSFileManager defaultManager];
++        [fm createDirectoryAtPath:@"/var/jb/var/mobile/Library/vcamplus" withIntermediateDirectories:YES attributes:nil error:nil];
++        NSString *proc = [[NSProcessInfo processInfo] processName];
++        NSString *existing = [NSString stringWithContentsOfFile:@"/var/jb/var/mobile/Library/vcamplus/engine.log"
++                                                        encoding:NSUTF8StringEncoding error:nil];
++        NSMutableArray *ls = [NSMutableArray array];
++        if (existing.length) [ls addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
++        [ls addObject:[NSString stringWithFormat:@"[%@] %s", proc, line]];
++        while ((int)ls.count > 300) [ls removeObjectAtIndex:0];
++        [[ls componentsJoinedByString:@"\n"]
++            writeToFile:@"/var/jb/var/mobile/Library/vcamplus/engine.log"
++            atomically:YES encoding:NSUTF8StringEncoding error:nil];
++    } @catch (NSException *e) {}
++}
 +static void vcam_log2(const char *fmt, ...) {
 +    char tmp[192]; va_list ap;
 +    va_start(ap, fmt); vsnprintf(tmp, sizeof(tmp), fmt, ap); va_end(ap);
@@ -1673,6 +1763,29 @@ index 9bc858c..59f4998 100644
 +    snprintf(gLogBuf[gLogHead % 64], sizeof(gLogBuf[0]), "[v32] %s", tmp);
 +    gLogHead++;
 +    if (gLogCount < 64) gLogCount++;
++    vcam_persistLog(tmp);
++}
++// [PATCH-v37] 限频日志 (帧级错误用, 每 key 5s 最多一条, 防刷爆日志文件)
++#define VCAM_RATE_SLOTS 8
++static char s_rateKeys[VCAM_RATE_SLOTS][32];
++static NSTimeInterval s_rateLast[VCAM_RATE_SLOTS];
++static void vcam_log2_rare(const char *key, const char *fmt, ...) {
++    NSTimeInterval now = CACurrentMediaTime();
++    for (int i = 0; i < VCAM_RATE_SLOTS; i++) {
++        if (!s_rateKeys[i][0]) {
++            strncpy(s_rateKeys[i], key, 31); s_rateKeys[i][31] = 0;
++            s_rateLast[i] = now;
++            break;
++        }
++        if (strcmp(s_rateKeys[i], key) == 0) {
++            if (now - s_rateLast[i] < 5.0) return;
++            s_rateLast[i] = now;
++            break;
++        }
++    }
++    char tmp[192]; va_list ap;
++    va_start(ap, fmt); vsnprintf(tmp, sizeof(tmp), fmt, ap); va_end(ap);
++    vcam_log2("%s", tmp);
 +}
 +void vcap_ui_mount(void);
 +#ifdef __cplusplus
@@ -1702,6 +1815,7 @@ index 9bc858c..59f4998 100644
 +// ===== [PATCH-v34] 动作分段引擎 (VCActionSystem 移植 · 独立模块) =====
 +#define VCAM_ACTIONS VCAM_DIR @"/actions.json"
 +#define VCAM_STATUS VCAM_DIR @"/status"   // [PATCH-v35] 引擎状态回写文件 (UI 跨进程读取)
++#define VCAM_ENGINE_LOG VCAM_DIR @"/engine.log"  // [PATCH-v37] 完整运行日志 (所有进程落盘)
 +
 +static char gActionID[64] = "";
 +static int gActionStop = 0;         // 一次性停止信号 (UI 写 1, 引擎读到即复位)
@@ -1842,6 +1956,7 @@ index 9bc858c..59f4998 100644
 +            // ---- v34 动作区间模式 ----
 +            if (!gReaderA || gReaderA.status != AVAssetReaderStatusReading) {
 +                if (!vcam_openReaderForRange(&gReaderA, &gOutputA, gActionStart, gActionEnd)) {
++                    vcam_log2_rare("range-open", "action range reader open FAILED [%.2f-%.2f]", gActionStart, gActionEnd);
 +                    [gLockA unlock]; return NULL;
 +                }
 +                gActionNextPos = gActionStart;
@@ -1902,7 +2017,10 @@ index 9bc858c..59f4998 100644
 +            }
 +        }
 +        if (!gReaderA || gReaderA.status != AVAssetReaderStatusReading) {
-+            if (!vcam_openReader(&gReaderA, &gOutputA)) { [gLockA unlock]; return NULL; }
++            if (!vcam_openReader(&gReaderA, &gOutputA)) {
++                vcam_log2_rare("reader-open", "video reader open FAILED — video.mp4 decode error");
++                [gLockA unlock]; return NULL;
++            }
 +        }
 +        CMSampleBufferRef sb = [gOutputA copyNextSampleBuffer];
 +        if (!sb) {
@@ -2201,8 +2319,12 @@ index 9bc858c..59f4998 100644
 +
 +    if (!s_xferSession) {
 +        OSStatus s = VTPixelTransferSessionCreate(kCFAllocatorDefault, &s_xferSession);
-+        if (s != noErr) return;
++        if (s != noErr) {
++            vcam_log2_rare("xfer", "VTPixelTransferSessionCreate failed: %d", (int)s);
++            return;
++        }
 +        VTSessionSetProperty(s_xferSession, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_Trim);
++        vcam_log2("VT transfer session created");
 +    }
 +
 +    // [PATCH-v33] 视频/图片源优先 (渲染器输出已合成黑边, 尺寸=目标, Trim 即可)
@@ -2213,10 +2335,14 @@ index 9bc858c..59f4998 100644
 +            CVPixelBufferRelease(src);
 +            return;
 +        }
++        vcam_log2_rare("render-null", "renderSourceToBGRA returned NULL (%zux%zu) — source decode failed, fallback pattern", w, h);
 +    }
 +
 +    CVPixelBufferRef src = v23_getTestPattern(w, h);
-+    if (!src) return;
++    if (!src) {
++        vcam_log2_rare("pattern-null", "getTestPattern returned NULL (%zux%zu)", w, h);
++        return;
++    }
 +
 +    VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
 +}
@@ -2255,9 +2381,9 @@ index 9bc858c..59f4998 100644
 +    Method m = class_getClassMethod(cls, sel);
 +    if (m) {
 +        method_setImplementation(m, newImp);
-+        NSLog(@"[v15bypass] swap +[%s %s]", class_getName(cls), sel_getName(sel));
++        vcam_log2("swap +[%s %s]", class_getName(cls), sel_getName(sel));
 +    } else {
-+        NSLog(@"[v15bypass] +[%s %s] not found", class_getName(cls), sel_getName(sel));
++        vcam_log2("+[%s %s] NOT FOUND", class_getName(cls), sel_getName(sel));
 +    }
 +}
 +static void swizzle_inst(Class cls, SEL sel, IMP newImp, const char *label) {
@@ -2265,9 +2391,9 @@ index 9bc858c..59f4998 100644
 +    Method m = class_getInstanceMethod(cls, sel);
 +    if (m) {
 +        method_setImplementation(m, newImp);
-+        NSLog(@"[v15bypass] swap -[%s %s]", class_getName(cls), sel_getName(sel));
++        vcam_log2("swap -[%s %s]", class_getName(cls), sel_getName(sel));
 +    } else {
-+        NSLog(@"[v15bypass] -[%s %s] not found", class_getName(cls), sel_getName(sel));
++        vcam_log2("-[%s %s] NOT FOUND", class_getName(cls), sel_getName(sel));
 +    }
 +}
 +
@@ -2328,11 +2454,11 @@ index 9bc858c..59f4998 100644
 +        }
 +        if (vcam_addrInImage(mh, p3, YES) && vcam_addrInImage(mh, p3 + 8, YES))
 +            *(volatile uint64_t *)(p3) = 4070908800ULL;
-+        NSLog(@"[v36bypass] writeVcamIvars: %d,%d,%d,%d (range-checked)",
++        vcam_log2("writeVcamIvars range-checked: %d,%d,%d,%d",
 +              vcam_addrInImage(mh, p0, YES), vcam_addrInImage(mh, p1, YES),
 +              vcam_addrInImage(mh, p2, YES), vcam_addrInImage(mh, p3, YES));
 +    } @catch (NSException *e) {
-+        NSLog(@"[v17bypass] writeVcamIvars exception: %@", e);
++        vcam_log2("writeVcamIvars exception: %@", e);
 +    }
 +}
 +
@@ -2382,14 +2508,14 @@ index 9bc858c..59f4998 100644
 +    // gate2 (vcam125 dylib base + 0xe9f4) — [PATCH-v36] 先段校验再挂
 +    uintptr_t g2 = (uintptr_t)mh + 0xe9f4;
 +    if (!vcam_addrInImage(mh, g2, NO)) {
-+        NSLog(@"[v36bypass] gate2 offset 0xe9f4 OUT OF IMAGE — vcam125 version mismatch, skip");
++        vcam_log2("gate2 offset 0xe9f4 OUT OF IMAGE — vcam125 version mismatch, skip");
 +    } else {
 +        @try {
 +            MSHookFunction((void *)g2, (void *)my_gate2, (void **)&orig_gate2);
 +            gHookGate2 = 1;
-+            NSLog(@"[v27bypass] gate2 @ %p hooked", (void *)g2);
++            vcam_log2("gate2 @ %p hooked", (void *)g2);
 +        } @catch (NSException *e) {
-+            NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
++            vcam_log2("gate2 hook FAILED: %@", e);
 +        }
 +    }
 +
@@ -2410,13 +2536,13 @@ index 9bc858c..59f4998 100644
 +    // 改在 tryObjCSwizzle 延迟 retry 里 method_setImplementation 替换 (vcam125 +load 完成后)
 +    uintptr_t pe = (uintptr_t)mh + 0xe240;   // [PATCH-v36] 先段校验再挂
 +    if (!vcam_addrInImage(mh, pe, NO)) {
-+        NSLog(@"[v36bypass] photoenc offset 0xe240 OUT OF IMAGE — skip");
++        vcam_log2("photoenc offset 0xe240 OUT OF IMAGE — skip");
 +    } else {
 +        @try {
 +            MSHookFunction((void *)pe, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
 +            gHookPhotoEnc = 1;
-+            NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
-+        } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
++            vcam_log2("BWPhotoEncoder.render newImp passthrough hooked");
++        } @catch (NSException *e) { vcam_log2("photoenc hook fail: %@", e); }
 +    }
 +}
 +
@@ -2427,7 +2553,7 @@ index 9bc858c..59f4998 100644
 +    Class vc = objc_getClass("VCamCore");
 +    if (!lc || !vc) {
 +        if (retriesLeft <= 0) {
-+            NSLog(@"[v16bypass] gave up swizzle: lc=%@ vc=%@ (classes never appeared after 100 retries)",
++            vcam_log2("gave up swizzle: lc=%@ vc=%@ (classes never appeared after 100 retries)",
 +                  lc, vc);
 +            return;
 +        }
@@ -2438,7 +2564,7 @@ index 9bc858c..59f4998 100644
 +    }
 +
 +    s_didObjCSwizzle = 1;
-+    NSLog(@"[v16bypass] *** classes appeared after retry, swizzling now");
++    vcam_log2("*** classes appeared after retry, swizzling now");
 +
 +    swizzle_class(lc, @selector(isLicenseValid),       (IMP)r_isLicenseValid,       "isLicenseValid");
 +    swizzle_class(lc, @selector(loadPersistedLicense), (IMP)r_loadPersistedLicense, "loadPersistedLicense");
@@ -2461,10 +2587,10 @@ index 9bc858c..59f4998 100644
 +                Method m = class_getInstanceMethod(scaleCls, sel_registerName("renderSampleBuffer:forInput:"));
 +                if (m) {
 +                    method_setImplementation(m, stillscale_orig);
-+                    NSLog(@"[v31bypass] BWStillImageScalerNode.render restored to Apple orig %p", stillscale_orig);
++                    vcam_log2("BWStillImageScalerNode.render restored to Apple orig %p", stillscale_orig);
 +                }
 +            }
-+        } @catch (NSException *e) { NSLog(@"[v31bypass] stillscale restore err: %@", e); }
++        } @catch (NSException *e) { vcam_log2("stillscale restore err: %@", e); }
 +    }
 +    // 我们替换了 renderReplacement → 强制 emit hook 调我们的 (vcam125 原版崩)
 +    swizzle_inst(vc, @selector(renderReplacementToPixelBuffer:), (IMP)r_VC_renderReplacementToPixelBuffer, "VC.renderReplPB");
@@ -2473,7 +2599,7 @@ index 9bc858c..59f4998 100644
 +    // (v18-v20 移除让 emit hook 在 step 6 bail, 我们 hook 永远没机会跑 → chicken-egg
 +    // LVP 永远不解码). 现在我们的 renderReplacement 已经替换 vcam125 原版 → 调进来不会崩.
 +    swizzle_inst(vc, @selector(hasReplacementFrame), (IMP)r_VC_hasReplacementFrame, "VC.hasReplacementFrame");
-+    NSLog(@"[v16bypass] *** ObjC swizzle complete");
++    vcam_log2("*** ObjC swizzle complete");
 +}
 +
 +static void onImageLoad(const struct mach_header *mh, intptr_t slide) {
@@ -2483,24 +2609,24 @@ index 9bc858c..59f4998 100644
 +    // [PATCH-v36] 诊断: 打印所有含 vcam 的加载 image; 匹配放宽到 "vcam" 子串
 +    // (千面改名/大小写变化导致 strstr("vcameracrack") 静默失效 = 全功能不生效根因之一)
 +    if (strstr(info.dli_fname, "vcam")) {
-+        NSLog(@"[v36bypass] vcam image load: %s", info.dli_fname);
++        vcam_log2("vcam image load: %s", info.dli_fname);
 +    }
 +    if (!strstr(info.dli_fname, "vcameracrack")) {
 +        if (strstr(info.dli_fname, "vcam")) {
-+            NSLog(@"[v36bypass] image contains 'vcam' but not 'vcameracrack' — checking segments");
++            vcam_log2("image contains 'vcam' but not 'vcameracrack' — checking segments");
 +            // 校验关键偏移, 全通过则视为目标 (防止改名后静默失效)
 +            BOOL ok = vcam_addrInImage(mh, (uintptr_t)mh + 0x63ab4, YES)
 +                   && vcam_addrInImage(mh, (uintptr_t)mh + 0xe9f4, NO)
 +                   && vcam_addrInImage(mh, (uintptr_t)mh + 0xe240, NO);
-+            if (ok) NSLog(@"[v36bypass] segment offsets MATCH — treat as vcameracrack");
-+            else { NSLog(@"[v36bypass] offsets mismatch, skip"); return; }
++            if (ok) vcam_log2("segment offsets MATCH — treat as vcameracrack");
++            else { vcam_log2("offsets mismatch, skip"); return; }
 +        } else {
 +            return;
 +        }
 +    }
 +
-+    NSLog(@"[v17bypass] *** vcameracrack loaded at %p slide=0x%lx path=%s",
-+          mh, (unsigned long)slide, info.dli_fname);
++    vcam_log2("*** vcameracrack loaded at %p slide=0x%lx path=%s",
++              mh, (unsigned long)slide, info.dli_fname);
 +    s_vcamMh = mh;
 +    s_vcamDylibName[0] = 0;
 +    strncpy(s_vcamDylibName, info.dli_fname, sizeof(s_vcamDylibName) - 1);
@@ -2525,14 +2651,14 @@ index 9bc858c..59f4998 100644
 +__attribute__((constructor))
 +static void v16_init(void) {
 +    NSString *proc = [[NSProcessInfo processInfo] processName];
-+    NSLog(@"[v16bypass] ctor in process: %@", proc);
++    vcam_log2("ctor in process: %@", proc);
 +    // [PATCH-v36] 枚举已加载 image, 打印含 vcam 的 (诊断 vcameracrack 加载情况)
 +    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
 +        const char *nm = _dyld_get_image_name(i);
-+        if (nm && strstr(nm, "vcam")) NSLog(@"[v36bypass] loaded: %s", nm);
++        if (nm && strstr(nm, "vcam")) vcam_log2("loaded image: %s", nm);
 +    }
 +    _dyld_register_func_for_add_image(onImageLoad);
-+    NSLog(@"[v16bypass] dyld add_image callback registered");
++    vcam_log2("dyld add_image callback registered");
 +
 +    // ALSO start an independent retry loop in case dyld callback never sees vcameracrack
 +    // (already-loaded edge case — though dyld should fire for already-loaded images)
@@ -2694,6 +2820,20 @@ index 9bc858c..59f4998 100644
 +        [m appendFormat:@"%s\n", gLogBuf[idx]];
 +    }
 +    return m;
++}
++// [PATCH-v37] 完整运行日志 (engine.log 全文, 含 mediaserverd 引擎事件)
++NSString *vcam_bypass_engine_log(void) {
++    @try {
++        NSString *c = [NSString stringWithContentsOfFile:VCAM_ENGINE_LOG encoding:NSUTF8StringEncoding error:nil];
++        return c ?: @"(日志文件不存在)";
++    } @catch (NSException *e) { return @"(读取日志异常)"; }
++}
++// [PATCH-v37] 清空日志文件
++void vcam_bypass_clear_log(void) {
++    @try {
++        [@"" writeToFile:VCAM_ENGINE_LOG atomically:YES encoding:NSUTF8StringEncoding error:nil];
++        vcam_log2("日志已清空");
++    } @catch (NSException *e) {}
 +}
 +#ifdef __cplusplus
 +}
