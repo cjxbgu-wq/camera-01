@@ -19,6 +19,9 @@
   布局映射); INSTALL_TARGET_PROCESSES 仅 SpringBoard
 - v41: plist Filter 恢复明确目标 (springboard+mediaserverd), 不做全局注入; 测试 App
   bundle id 由用户在 RootHide App List 勾选 + 追加到 plist Bundles
+- v41: 全部文件路径改用 **jbroot()** (RootHide 官方 API, 弱引用: 非 RootHide 环境
+  自动回退 /var/jb) — controls/status/actions.json/engine.log/video.mp4/image.jpg
+  不再硬编码越狱根目录 (Tweak.xm + VCamBypassUI.m 两处)
 - 注: 用户确认环境 = RootHide Bootstrap (App List 按需注入), 打包应用
   THEOS_PACKAGE_SCHEME=roothide; plist Filter 用明确测试目标 Bundle ID, 不做全局注入
 
