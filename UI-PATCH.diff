@@ -1,8 +1,18 @@
 diff --git a/Makefile b/Makefile
-index 2872389..ef36435 100644
+index 2872389..86db354 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -5,11 +5,11 @@ THEOS_PACKAGE_SCHEME = rootless
+@@ -1,15 +1,18 @@
+-TARGET = iphone:clang:latest:14.0
++TARGET = iphone:clang:latest:15.0
+ ARCHS = arm64 arm64e
+-INSTALL_TARGET_PROCESSES = mediaserverd SpringBoard
+-THEOS_PACKAGE_SCHEME = rootless
++INSTALL_TARGET_PROCESSES = SpringBoard
++# [PATCH-v41] RootHide 官方 Theos: THEOS_PACKAGE_SCHEME=roothide
++# dylib+plist 直接进 /var/jb/usr/lib/TweakInject/ (RootHide 注入器读取位置),
++# 不再依赖 substrate 布局映射. 第三方 App 注入由 RootHide App List 控制.
++THEOS_PACKAGE_SCHEME = roothide
  
  include $(THEOS)/makefiles/common.mk
  
@@ -1313,10 +1323,10 @@ index 4fe9530..144a376 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..3606d46 100644
+index 9bc858c..cf012a2 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1181 @@
+@@ -1,370 +1,1226 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2570,6 +2580,51 @@ index 9bc858c..3606d46 100644
 +            vcam_log2("BWPhotoEncoder.render newImp passthrough hooked");
 +        } @catch (NSException *e) { vcam_log2("photoenc hook fail: %@", e); }
 +    }
++}
++
++// [PATCH-v41] 系统相机管线探测器 — 不依赖 vcameracrack 内部 (千面版无
++// LicenseCore/VCamCore, 0x63xxx 偏移全部段外): 直接枚举系统类方法列表,
++// 拿到真实 selector 供重写替换核心使用. 任意进程跑, 结果进 engine.log.
++static void v41_probeOnce(int pass) {
++    @autoreleasepool {
++        const char *names[] = {"BWNodeOutput", "BWStillImageScalerNode",
++                               "BWPhotoEncoderNode", "GPUImageProcessor",
++                               "LicenseCore", "VCamCore", "LocalVideoPlayer",
++                               "AVCaptureSession", "AVCaptureVideoDataOutput"};
++        NSMutableString *line = [NSMutableString stringWithFormat:@"v41 probe pass%d:", pass];
++        for (int i = 0; i < (int)(sizeof(names)/sizeof(names[0])); i++) {
++            Class c = objc_getClass(names[i]);
++            [line appendFormat:@" %s=%d", names[i], c != NULL];
++            if (!c) continue;
++            unsigned int mc = 0;
++            Method *ml = class_copyMethodList(c, &mc);
++            if (!ml) continue;
++            NSMutableString *ms = [NSMutableString string];
++            unsigned int show = mc < 60 ? mc : 60;
++            for (unsigned int j = 0; j < show; j++) {
++                if (ms.length) [ms appendString:@"|"];
++                [ms appendFormat:@"%s", sel_getName(method_getName(ml[j]))];
++            }
++            free(ml);
++            vcam_log2("v41 %s methods(%u): %s", names[i], mc, ms.UTF8String);
++        }
++        vcam_log2("%s", line.UTF8String);
++    }
++}
++
++static void v41_startProbe(void) {
++    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
++                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
++        v41_probeOnce(1);
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
++                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
++            v41_probeOnce(2);
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
++                           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
++                v41_probeOnce(3);
++            });
++        });
++    });
 +}
 +
 +// Try ObjC class swizzle — called repeatedly until classes appear

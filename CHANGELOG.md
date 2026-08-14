@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v1.2.2 (2026-08-14)
+
+### 诊断 (自检结论: 引擎 hook 目标不存在)
+- 本地 Mach-O 解析千面安装包 vcameracrack.dylib (arm64e slice):
+  - 段布局 __TEXT 0x0-0x2C000 / __DATA_CONST / __DATA 0x30000-0x34000
+  - 全部 0x63xxx 偏移 (g_isLicenseValid/g_features/g_expiry/stash 槽) → **段外不存在**
+  - 符号表/字符串表 **无 LicenseCore/VCamCore/isLicenseValid/renderReplacementToPixelBuffer**
+  - 千面版是独立实现: GPUImageProcessor + hook 系统类 BWNodeOutput/BWStillImageScalerNode/
+    BWPhotoEncoderNode + 媒体 /var/mobile/Media/DCIM/vcam + RTMP
+  - 结论: v15-v40 的「等 LicenseCore/VCamCore 出现再 swizzle」架构对千面版无效,
+    替换核心必须重写为直接 hook 系统相机管线 (千面同路线)
+- v41: 系统类探测器 — 每进程 3 次 (5s/15s/30s) 枚举 BWNodeOutput/BWStillImageScalerNode/
+  BWPhotoEncoderNode/GPUImageProcessor/LicenseCore/VCamCore 存在性 + 方法列表 → engine.log
+  供重写替换核心使用 (真实 selector)
+- v41: 打包改为 **THEOS_PACKAGE_SCHEME=roothide** (RootHide 官方 Theos) — dylib+plist
+  直接进 /var/jb/usr/lib/TweakInject/ (RootHide 注入器读取位置, 不再依赖 substrate
+  布局映射); INSTALL_TARGET_PROCESSES 仅 SpringBoard
+- v41: plist Filter 恢复明确目标 (springboard+mediaserverd), 不做全局注入; 测试 App
+  bundle id 由用户在 RootHide App List 勾选 + 追加到 plist Bundles
+- 注: 用户确认环境 = RootHide Bootstrap (App List 按需注入), 打包应用
+  THEOS_PACKAGE_SCHEME=roothide; plist Filter 用明确测试目标 Bundle ID, 不做全局注入
+
 ## v1.2.1 (2026-08-14)
 
 ### 修复 (核心: 注入目标不再猜测)
