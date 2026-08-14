@@ -1313,7 +1313,7 @@ index 4fe9530..144a376 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..6fab12f 100644
+index 9bc858c..606a25a 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
 @@ -1,370 +1,1177 @@
@@ -2579,8 +2579,8 @@ index 9bc858c..6fab12f 100644
 +    Class vc = objc_getClass("VCamCore");
 +    if (!lc || !vc) {
 +        if (retriesLeft <= 0) {
-+            vcam_log2("gave up swizzle: lc=%@ vc=%@ (classes never appeared after 100 retries)",
-+                  lc, vc);
++            vcam_log2("gave up swizzle: lc=%s vc=%s (classes never appeared after 100 retries)",
++                  lc ? class_getName(lc) : "nil", vc ? class_getName(vc) : "nil");
 +            return;
 +        }
 +        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
@@ -2677,7 +2677,7 @@ index 9bc858c..6fab12f 100644
 +__attribute__((constructor))
 +static void v16_init(void) {
 +    NSString *proc = [[NSProcessInfo processInfo] processName];
-+    vcam_log2("ctor in process: %@", proc);
++    vcam_log2("ctor in process: %s", [proc UTF8String] ? [proc UTF8String] : "?");
 +    // [PATCH-v36] 枚举已加载 image, 打印含 vcam 的 (诊断 vcameracrack 加载情况)
 +    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
 +        const char *nm = _dyld_get_image_name(i);
