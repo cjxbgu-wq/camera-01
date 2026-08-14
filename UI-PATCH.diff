@@ -1345,10 +1345,10 @@ index 4fe9530..49eeeca 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..b45f3e4 100644
+index 9bc858c..6394d58 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1250 @@
+@@ -1,370 +1,1255 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2635,22 +2635,31 @@ index 9bc858c..b45f3e4 100644
 +                               "BWPhotoEncoderNode", "GPUImageProcessor",
 +                               "LicenseCore", "VCamCore", "LocalVideoPlayer",
 +                               "AVCaptureSession", "AVCaptureVideoDataOutput"};
++        BOOL fullMethods[] = {YES, YES, YES, YES,
++                              YES, YES, YES,
++                              NO, NO};  // 标准类只查存在性, 省日志
 +        NSMutableString *line = [NSMutableString stringWithFormat:@"v41 probe pass%d:", pass];
 +        for (int i = 0; i < (int)(sizeof(names)/sizeof(names[0])); i++) {
 +            Class c = objc_getClass(names[i]);
 +            [line appendFormat:@" %s=%d", names[i], c != NULL];
-+            if (!c) continue;
++            if (!c || !fullMethods[i]) continue;
 +            unsigned int mc = 0;
 +            Method *ml = class_copyMethodList(c, &mc);
 +            if (!ml) continue;
 +            NSMutableString *ms = [NSMutableString string];
-+            unsigned int show = mc < 60 ? mc : 60;
-+            for (unsigned int j = 0; j < show; j++) {
-+                if (ms.length) [ms appendString:@"|"];
-+                [ms appendFormat:@"%s", sel_getName(method_getName(ml[j]))];
++            for (unsigned int j = 0; j < mc; j++) {
++                [ms appendFormat:@"%s|", sel_getName(method_getName(ml[j]))];
 +            }
 +            free(ml);
-+            vcam_log2("v41 %s methods(%u): %s", names[i], mc, ms.UTF8String);
++            // vcam_log2 缓冲 192B → 分块 ~120 字符/行, 保证全量方法不截断
++            NSMutableString *block = [NSMutableString string];
++            for (NSUInteger ci = 0; ci < ms.length; ci++) {
++                [block appendFormat:@"%C", [ms characterAtIndex:ci]];
++                if (block.length >= 120 || ci == ms.length - 1) {
++                    vcam_log2("v41 %s methods(%u): %s", names[i], mc, block.UTF8String);
++                    [block setString:@""];
++                }
++            }
 +        }
 +        vcam_log2("%s", line.UTF8String);
 +    }
@@ -2660,13 +2669,9 @@ index 9bc858c..b45f3e4 100644
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
 +        v41_probeOnce(1);
-+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
++        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
 +                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
 +            v41_probeOnce(2);
-+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
-+                           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-+                v41_probeOnce(3);
-+            });
 +        });
 +    });
 +}
