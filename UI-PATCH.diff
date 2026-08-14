@@ -1323,10 +1323,10 @@ index 4fe9530..144a376 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..cf012a2 100644
+index 9bc858c..7de1fd6 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1226 @@
+@@ -1,370 +1,1228 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2749,6 +2749,8 @@ index 9bc858c..cf012a2 100644
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
 +                   ^{ tryObjCSwizzle(100); });
++    // [PATCH-v41] 系统相机管线探测 (mediaserverd/SpringBoard/任意进程): 5s/15s/30s 三次
++    v41_startProbe();
 +    vcap_ui_mount(); // [PATCH-v32] UI 模块挂载 (仅 SpringBoard 生效)
 +    // [PATCH-v35/v39/v40] 状态回写由「匹配到 vcameracrack 的进程」启动 (见 onImageLoad),
 +    // v40: plist Filter 已移除 → 全进程注入, 引擎在任意含 vcameracrack 的进程自适应激活
