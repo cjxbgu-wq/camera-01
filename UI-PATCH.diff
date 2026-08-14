@@ -1,40 +1,3 @@
-diff --git a/Makefile b/Makefile
-index 2872389..41c933e 100644
---- a/Makefile
-+++ b/Makefile
-@@ -1,15 +1,24 @@
--TARGET = iphone:clang:latest:14.0
-+TARGET = iphone:clang:latest:15.0
- ARCHS = arm64 arm64e
--INSTALL_TARGET_PROCESSES = mediaserverd SpringBoard
-+INSTALL_TARGET_PROCESSES = SpringBoard mediaserverd
-+# [PATCH-v44] DynamicLibraries 布局 (参考资料: 千面已运行项目同款):
-+#   - dylib+plist 装 /var/jb/Library/MobileSubstrate/DynamicLibraries/
-+#   - TweakLoader(ellekit) 按 plist Filter (Bundles+Executables) 注入
-+#   - mediaserverd 在 Bootstrap resignList.plist 内(已重签名) -> daemon 可注入
-+#   - .roothidepatch = 文本文件(内容指向 AutoPatches.dylib), 与千面一致
-+# v43(DynamicPatches) 走错通道(PatchLoader 不覆盖系统进程), 已废弃.
- THEOS_PACKAGE_SCHEME = rootless
- 
- include $(THEOS)/makefiles/common.mk
- 
--TWEAK_NAME = aaa-vcam125-bypass
-+TWEAK_NAME = vcampro-bypass
- 
--aaa-vcam125-bypass_FILES      = Tweak.xm
--aaa-vcam125-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
--aaa-vcam125-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox
--aaa-vcam125-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
-+vcampro-bypass_FILES      = Tweak.xm Modules/VCamBypassUI.m
-+vcampro-bypass_LDFLAGS    = -Wl,-x -Wl,-S -lsubstrate
-+vcampro-bypass_FRAMEWORKS = Foundation Security CoreVideo VideoToolbox UIKit QuartzCore AVFoundation CoreImage CoreMedia
-+vcampro-bypass_CFLAGS     = -fobjc-arc -Wno-deprecated-declarations -Wno-unguarded-availability-new -O2
- 
- include $(THEOS_MAKE_PATH)/tweak.mk
-+
-+before-package::
-+	printf '%s' "/usr/lib/DynamicPatches/AutoPatches.dylib" > "$(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries/vcampro-bypass.dylib.roothidepatch"
-\ No newline at end of file
 diff --git a/Modules/VCamBypassUI.h b/Modules/VCamBypassUI.h
 index 3fdd407..c938436 100644
 --- a/Modules/VCamBypassUI.h
@@ -2725,16 +2688,3 @@ index 9bc858c..c9d39fa 100644
 +}
 +#endif
 \ No newline at end of file
-diff --git a/control b/control
-index a25aca8..0d3c8dc 100644
---- a/control
-+++ b/control
-@@ -2,7 +2,7 @@ Package: com.vcampro.bypass
- Name: VCam Pro Bypass
- Version: 1.1.0
- Architecture: iphoneos-arm64
--Depends: firmware (>= 15.0), com.roothide.patchloader
-+Depends: firmware (>= 15.0), mobilesubstrate
- Recommends: com.taokk3.qianmian
- Description: VCam Pro 相机画面替换引擎 (RootHide DynamicPatches). PatchLoader 注入 mediaserverd (全局相机管线: hook BWNodeOutput.emitSampleBuffer + BWStillImageScalerNode/BWPhotoEncoderNode.renderSampleBuffer 替换输出) + SpringBoard (浮球控制面板: 视频/图片/颜色注入/旋转/暂停/动作). 不再依赖 vcameracrack 内部类.
- Author: vcampro

@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v1.2.5 (2026-08-14)
+
+### 安装修复 (v45)
+- **根因**: v44 的 before-package 预置 `.roothidepatch` 文本 → RootHidePatcher 安装时
+  自动生成 `.roothidepatch` 符号链接报 `File exists` → Error(256) 安装中止 →
+  部分残留 dylib 注入 SB → Safe Mode.
+- **修复**: 删除预置 (千面 deb 原包不带此文件, 安装时自动生成);
+  Makefile/control 先提交, 补丁只含代码 diff (v43 成功模式).
+
 ## v1.2.4 (2026-08-14)
 
 ### 注入机制修正 (v44, 依据参考资料: 千面已运行项目)
