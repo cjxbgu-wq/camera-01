@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v1.1.8 (2026-08-14)
+
+### 修复
+- fix: vcam125 固定偏移无边界校验 — 千面升级导致偏移错位时, `writeVcamIvars`
+  直接写内存 = EXC_BAD_ACCESS (信号级崩溃, @try 拦不住) → mediaserverd 崩溃循环 →
+  相机黑屏. v36 新增 `vcam_addrInImage` Mach-O 段边界校验, 所有偏移操作
+  (ivar 写入 / gate2 0xe9f4 / photoenc 0xe240 / stash slot 0x639d8/0x639e0 读取)
+  先校验地址在映射段内且段可写, 越界则跳过并打日志.
+- fix: vcameracrack dylib 名匹配静默失效 — `strstr("vcameracrack")` 不匹配
+  (改名/大小写) 时所有功能静默不生效. v36 放宽: 含 "vcam" 的 image 打印日志
+  并做关键偏移段校验, 通过则视为目标; ctor 枚举所有已加载 image 打印候选.
+- fix: STATUS 页新增第 6 行「VCAM 引擎」— 显示 mediaserverd 是否匹配到 vcam
+  dylib (status 文件第 11 字段), 可直接区分"千面未加载"与"hook 未生效".
+
 ## v1.1.7 (2026-08-14)
 
 ### 修复

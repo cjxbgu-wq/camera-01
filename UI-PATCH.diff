@@ -20,10 +20,18 @@ index 2872389..ef36435 100644
  
  include $(THEOS_MAKE_PATH)/tweak.mk
 diff --git a/Modules/VCamBypassUI.h b/Modules/VCamBypassUI.h
-index 3fdd407..8ee95af 100644
+index 3fdd407..2a815fa 100644
 --- a/Modules/VCamBypassUI.h
 +++ b/Modules/VCamBypassUI.h
-@@ -21,6 +21,21 @@ NSString *vcam_bypass_logs(void);               // 内存日志导出
+@@ -11,6 +11,7 @@ extern "C" {
+ 
+ // ---- 状态读取 (由 UI-PATCH.diff 在 Tweak.xm 中实现, 本模块只声明) ----
+ BOOL vcam_bypass_status(int *swizzled, int *cfhooks, int *gate2, int *seckey, int *photoenc);
++int  vcam_bypass_engine_detected(void);  // [PATCH-v36] 引擎是否匹配到 vcam dylib (0/1)
+ 
+ // ---- 控制 ----
+ BOOL vcam_bypass_set_replace(BOOL on);          // 画面替换总开关
+@@ -21,6 +22,21 @@ NSString *vcam_bypass_logs(void);               // 内存日志导出
  int  vcam_bypass_get_replace(void);             // 读当前开关
  int  vcam_bypass_get_camera_pass(void);
  
@@ -46,7 +54,7 @@ index 3fdd407..8ee95af 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..f50085d 100644
+index 4fe9530..93e1e98 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,29 @@
@@ -110,7 +118,7 @@ index 4fe9530..f50085d 100644
 +    UIButton *_btnPause;
 +    UIButton *_btnReplace;
 +    UILabel *_chipVal[4];
-+    UILabel *_stVal[5];
++    UILabel *_stVal[6];
 +    UILabel *_srcVideoVal;
 +    UILabel *_srcImageVal;
 +    UILabel *_srcActiveVal;
@@ -395,7 +403,7 @@ index 4fe9530..f50085d 100644
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +369,643 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +369,645 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
@@ -564,7 +572,7 @@ index 4fe9530..f50085d 100644
 +        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
 +    [pg3 addSubview:actAdd]; [pg3 addSubview:actStop];
 +    [_pages addSubview:pg3];
- 
++
 +    // ================= FUNC 页: 2x3 网格功能键 (等宽等距) =================
 +    CGFloat bw = (cw - 40 - 12) / 2;
 +    CGFloat bh = 52;
@@ -593,7 +601,7 @@ index 4fe9530..f50085d 100644
 +    [pg1 addSubview:b1]; [pg1 addSubview:b2];
 +    [pg1 addSubview:b3]; [pg1 addSubview:b4];
 +    [pg1 addSubview:_btnPause]; [pg1 addSubview:_btnReplace];
-+
+ 
 +    // 6 色块 3x2 (图案颜色)
      for (int i = 0; i < 6; i++) {
          UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -636,6 +644,7 @@ index 4fe9530..f50085d 100644
 +    [self mkStatusRow:pg2 y:204 label:@"GATE2 授权" tag:3];
 +    [self mkStatusRow:pg2 y:236 label:@"SECKEY 验证" tag:4];
 +    [self mkStatusRow:pg2 y:268 label:@"照片编码器" tag:5];
++    [self mkStatusRow:pg2 y:300 label:@"VCAM 引擎" tag:6];   // [PATCH-v36] 引擎是否匹配到 vcam dylib
 +    // 能量条
 +    CGFloat barX = 286;
 +    UILabel *enL = [[UILabel alloc] initWithFrame:CGRectMake(barX, 128, 44, 10)];
@@ -824,6 +833,11 @@ index 4fe9530..f50085d 100644
 -    _chipVal[2].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
 -    _swReplace.on = vcReplaceOn();
 -    _swCamera.on = vcCameraPassOn();
+-    BOOL st[5] = {sw, cf, g2, sk, pe};
+-    UIColor *good = VCB_GREEN, *bad = VCB_GRAY;
+-    for (int i = 0; i < 5; i++) {
+-        _stVal[i].text = st[i] ? @"ON" : @"--";
+-        _stVal[i].textColor = st[i] ? good : bad;
 +    _chipVal[3].text = [NSString stringWithFormat:@"%d/5", hooks];
 +    _chipVal[3].textColor = hooks == 5 ? VCB_GREEN : VCB_AMBER;
 +    // 播放/暂停
@@ -842,11 +856,9 @@ index 4fe9530..f50085d 100644
 +        mode == 1 ? @"视频" : (mode == 2 ? @"图片" : @"图案")];
 +    _srcActiveVal.textColor = rep ? VCB_GREEN : VCB_RED;
 +    // 挂钩行
-     BOOL st[5] = {sw, cf, g2, sk, pe};
--    UIColor *good = VCB_GREEN, *bad = VCB_GRAY;
-     for (int i = 0; i < 5; i++) {
--        _stVal[i].text = st[i] ? @"ON" : @"--";
--        _stVal[i].textColor = st[i] ? good : bad;
++    BOOL st[6] = {sw, cf, g2, sk, pe, 0};
++    st[5] = vcam_bypass_engine_detected() != 0;   // [PATCH-v36] VCAM dylib 匹配
++    for (int i = 0; i < 6; i++) {
 +        _stVal[i].text = st[i] ? @"● 开" : @"--";
 +        _stVal[i].textColor = st[i] ? VCB_GREEN : VCB_GRAY;
      }
@@ -1165,7 +1177,7 @@ index 4fe9530..f50085d 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1082,15 @@ void vcToggleMenu(void) {
+@@ -499,21 +1084,15 @@ void vcToggleMenu(void) {
  }
  
  // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
@@ -1190,7 +1202,7 @@ index 4fe9530..f50085d 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -547,16 +1124,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1126,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
@@ -1219,10 +1231,10 @@ index 4fe9530..f50085d 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..7bab8e6 100644
+index 9bc858c..59f4998 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1007 @@
+@@ -1,370 +1,1093 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -1606,6 +1618,7 @@ index 9bc858c..7bab8e6 100644
 +#import <objc/runtime.h>
 +#import <objc/message.h>
 +#import <mach-o/dyld.h>
++#import <mach-o/loader.h>
 +#import <dlfcn.h>
 +#import <substrate.h>
 +#import <Security/Security.h>
@@ -1616,6 +1629,31 @@ index 9bc858c..7bab8e6 100644
 +#import <CoreImage/CoreImage.h>
 +#import <CoreMedia/CoreMedia.h>
 +#import <QuartzCore/QuartzCore.h>
++
++// [PATCH-v36] Mach-O 段边界校验: vcam125 偏移是静态逆向固定值, 若千面升级导致
++// 偏移错位, 直接写/挂错地址 = EXC_BAD_ACCESS (信号级, @try 拦不住) → mediaserverd
++// 崩溃循环 → 相机黑屏. 所有偏移操作前先校验地址在 image 映射段内.
++static BOOL vcam_addrInImage(const struct mach_header *mh, uintptr_t addr, BOOL needWrite) {
++    if (!mh) return NO;
++    const struct mach_header_64 *mh64 = (const struct mach_header_64 *)mh;
++    if (mh64->magic != MH_MAGIC_64 || mh64->ncmds == 0) return NO;
++    uintptr_t base = (uintptr_t)mh;
++    const struct load_command *lc = (const struct load_command *)(mh64 + 1);
++    for (uint32_t i = 0; i < mh64->ncmds; i++) {
++        if (lc->cmdsize < sizeof(struct load_command)) break;
++        if (lc->cmd == LC_SEGMENT_64) {
++            const struct segment_command_64 *seg = (const struct segment_command_64 *)lc;
++            uintptr_t s = base + seg->vmaddr;
++            uintptr_t e = s + seg->vmsize;
++            if (addr >= s && addr < e) {
++                if (!needWrite) return YES;
++                return (seg->initprot & VM_PROT_WRITE) != 0;
++            }
++        }
++        lc = (const struct load_command *)((uint8_t *)lc + lc->cmdsize);
++    }
++    return NO;
++}
 +
 +// ===== [PATCH-v32] UI 控制/状态接口 (VCamBypassUI 模块调用) =====
 +// .xm 编译为 C++, 跨模块接口必须 extern "C" 以匹配 ObjC 模块的 C 符号
@@ -2238,6 +2276,7 @@ index 9bc858c..7bab8e6 100644
 +static int s_didCFunctionHooks = 0;
 +static int s_didObjCSwizzle = 0;
 +static const struct mach_header *s_vcamMh = NULL;
++static char s_vcamDylibName[256] = "";   // [PATCH-v36] 匹配到的 dylib 路径 (诊断/状态)
 +
 +// ===== [PATCH-v35] 引擎状态回写文件 (跨进程检测修复: UI 读 mediaserverd 真实状态) =====
 +// 原因: vcam_bypass_status 在 SpringBoard 读本进程 globals, 永远 0/5 → 面板误导.
@@ -2257,10 +2296,10 @@ index 9bc858c..7bab8e6 100644
 +            NSFileManager *fm = [NSFileManager defaultManager];
 +            [fm createDirectoryAtPath:VCAM_DIR withIntermediateDirectories:YES attributes:nil error:nil];
 +            int sm = vcam_videoExists() ? 1 : (vcam_imageExists() ? 2 : 0);
-+            NSString *line = [NSString stringWithFormat:@"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
++            NSString *line = [NSString stringWithFormat:@"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
 +                s_didObjCSwizzle, s_didCFunctionHooks, gHookGate2, gHookSecKey, gHookPhotoEnc,
 +                gReplaceEnabled, gColorInject, sm, gVideoPaused,
-+                gActionActive];
++                gActionActive, s_vcamMh ? 1 : 0];
 +            [line writeToFile:VCAM_STATUS atomically:YES encoding:NSUTF8StringEncoding error:nil];
 +        } @catch (NSException *e) {}
 +    });
@@ -2277,16 +2316,21 @@ index 9bc858c..7bab8e6 100644
 +    if (!mh) return;
 +    uint8_t *base = (uint8_t *)mh;
 +    @try {
-+        // g_isLicenseValid = 1
-+        *(volatile uint8_t *)(base + 0x63ab4) = 1;
-+        // g_features = 0xFFFFFFFF
-+        *(volatile uint32_t *)(base + 0x63ab8) = 0xFFFFFFFFU;
-+        // g_runtime_keys = 32 bytes of 0x42 (consistent pattern, not 0/random)
-+        for (int i = 0; i < 32; i++) {
-+            ((volatile uint8_t *)(base + 0x63abc))[i] = 0x42;
++        // [PATCH-v36] 每处偏移先做段边界校验, 防版本偏移错位写崩 (黑屏崩溃循环根因)
++        uintptr_t p0 = (uintptr_t)base + 0x63ab4;
++        uintptr_t p1 = (uintptr_t)base + 0x63ab8;
++        uintptr_t p2 = (uintptr_t)base + 0x63abc;
++        uintptr_t p3 = (uintptr_t)base + 0x63980;
++        if (vcam_addrInImage(mh, p0, YES)) *(volatile uint8_t *)(p0) = 1;
++        if (vcam_addrInImage(mh, p1, YES)) *(volatile uint32_t *)(p1) = 0xFFFFFFFFU;
++        if (vcam_addrInImage(mh, p2, YES) && vcam_addrInImage(mh, p2 + 32, YES)) {
++            for (int i = 0; i < 32; i++) ((volatile uint8_t *)p2)[i] = 0x42;
 +        }
-+        // g_expiry (uint64 LE) = 2099 unix
-+        *(volatile uint64_t *)(base + 0x63980) = 4070908800ULL;
++        if (vcam_addrInImage(mh, p3, YES) && vcam_addrInImage(mh, p3 + 8, YES))
++            *(volatile uint64_t *)(p3) = 4070908800ULL;
++        NSLog(@"[v36bypass] writeVcamIvars: %d,%d,%d,%d (range-checked)",
++              vcam_addrInImage(mh, p0, YES), vcam_addrInImage(mh, p1, YES),
++              vcam_addrInImage(mh, p2, YES), vcam_addrInImage(mh, p3, YES));
 +    } @catch (NSException *e) {
 +        NSLog(@"[v17bypass] writeVcamIvars exception: %@", e);
 +    }
@@ -2321,7 +2365,10 @@ index 9bc858c..7bab8e6 100644
 +//   0x639e0 = BWPhotoEncoderNode.render orig (MSHookFunction passthrough)
 +static void my_photoenc_passthrough(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
 +    if (!s_mh_for_render) return;
-+    render_fn_t orig = *(render_fn_t *)((const uint8_t *)s_mh_for_render + 0x639e0);
++    // [PATCH-v36] stash slot 读取前校验, 防越界 (读错地址 = 崩)
++    uintptr_t slot = (uintptr_t)s_mh_for_render + 0x639e0;
++    if (!vcam_addrInImage(s_mh_for_render, slot, NO)) return;
++    render_fn_t orig = *(render_fn_t *)slot;
 +    if (orig) orig(self, _cmd, sb, input);
 +}
 +
@@ -2332,14 +2379,18 @@ index 9bc858c..7bab8e6 100644
 +
 +    s_mh_for_render = mh;
 +
-+    // gate2 (vcam125 dylib base + 0xe9f4)
-+    void *gate2_addr = (void *)((uintptr_t)mh + 0xe9f4);
-+    @try {
-+        MSHookFunction(gate2_addr, (void *)my_gate2, (void **)&orig_gate2);
-+        gHookGate2 = 1;
-+        NSLog(@"[v27bypass] gate2 @ %p hooked", gate2_addr);
-+    } @catch (NSException *e) {
-+        NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
++    // gate2 (vcam125 dylib base + 0xe9f4) — [PATCH-v36] 先段校验再挂
++    uintptr_t g2 = (uintptr_t)mh + 0xe9f4;
++    if (!vcam_addrInImage(mh, g2, NO)) {
++        NSLog(@"[v36bypass] gate2 offset 0xe9f4 OUT OF IMAGE — vcam125 version mismatch, skip");
++    } else {
++        @try {
++            MSHookFunction((void *)g2, (void *)my_gate2, (void **)&orig_gate2);
++            gHookGate2 = 1;
++            NSLog(@"[v27bypass] gate2 @ %p hooked", (void *)g2);
++        } @catch (NSException *e) {
++            NSLog(@"[v27bypass] gate2 hook FAILED: %@", e);
++        }
 +    }
 +
 +    // SecKeyVerifySignature framework hook
@@ -2357,12 +2408,16 @@ index 9bc858c..7bab8e6 100644
 +    // v31: 只 MSHookFunction BWPhotoEncoder (v28 work 的方式)
 +    // BWStillImageScaler 0xe234 不能 MSHookFunction — 与 0xe240 间距 12B, trampoline 16B 会重叠崩
 +    // 改在 tryObjCSwizzle 延迟 retry 里 method_setImplementation 替换 (vcam125 +load 完成后)
-+    void *photoenc_addr = (void *)((uintptr_t)mh + 0xe240);
-+    @try {
-+        MSHookFunction(photoenc_addr, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
-+        gHookPhotoEnc = 1;
-+        NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
-+    } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
++    uintptr_t pe = (uintptr_t)mh + 0xe240;   // [PATCH-v36] 先段校验再挂
++    if (!vcam_addrInImage(mh, pe, NO)) {
++        NSLog(@"[v36bypass] photoenc offset 0xe240 OUT OF IMAGE — skip");
++    } else {
++        @try {
++            MSHookFunction((void *)pe, (void *)my_photoenc_passthrough, (void **)&orig_photoenc_newImp);
++            gHookPhotoEnc = 1;
++            NSLog(@"[v31bypass] BWPhotoEncoder.render newImp passthrough hooked");
++        } @catch (NSException *e) { NSLog(@"[v31bypass] photoenc hook fail: %@", e); }
++    }
 +}
 +
 +// Try ObjC class swizzle — called repeatedly until classes appear
@@ -2397,7 +2452,10 @@ index 9bc858c..7bab8e6 100644
 +    // 不能 MSHookFunction 0xe234 因与 0xe240 trampoline 重叠.
 +    if (s_mh_for_render) {
 +        @try {
-+            IMP stillscale_orig = *(IMP *)((const uint8_t *)s_mh_for_render + 0x639d8);
++            // [PATCH-v36] stash slot 读取前校验
++            uintptr_t slot = (uintptr_t)s_mh_for_render + 0x639d8;
++            IMP stillscale_orig = vcam_addrInImage(s_mh_for_render, slot, NO)
++                ? *(IMP *)slot : NULL;
 +            Class scaleCls = objc_getClass("BWStillImageScalerNode");
 +            if (scaleCls && stillscale_orig) {
 +                Method m = class_getInstanceMethod(scaleCls, sel_registerName("renderSampleBuffer:forInput:"));
@@ -2422,11 +2480,30 @@ index 9bc858c..7bab8e6 100644
 +    Dl_info info;
 +    if (dladdr((const void *)mh, &info) == 0) return;
 +    if (!info.dli_fname) return;
-+    if (!strstr(info.dli_fname, "vcameracrack")) return;
++    // [PATCH-v36] 诊断: 打印所有含 vcam 的加载 image; 匹配放宽到 "vcam" 子串
++    // (千面改名/大小写变化导致 strstr("vcameracrack") 静默失效 = 全功能不生效根因之一)
++    if (strstr(info.dli_fname, "vcam")) {
++        NSLog(@"[v36bypass] vcam image load: %s", info.dli_fname);
++    }
++    if (!strstr(info.dli_fname, "vcameracrack")) {
++        if (strstr(info.dli_fname, "vcam")) {
++            NSLog(@"[v36bypass] image contains 'vcam' but not 'vcameracrack' — checking segments");
++            // 校验关键偏移, 全通过则视为目标 (防止改名后静默失效)
++            BOOL ok = vcam_addrInImage(mh, (uintptr_t)mh + 0x63ab4, YES)
++                   && vcam_addrInImage(mh, (uintptr_t)mh + 0xe9f4, NO)
++                   && vcam_addrInImage(mh, (uintptr_t)mh + 0xe240, NO);
++            if (ok) NSLog(@"[v36bypass] segment offsets MATCH — treat as vcameracrack");
++            else { NSLog(@"[v36bypass] offsets mismatch, skip"); return; }
++        } else {
++            return;
++        }
++    }
 +
 +    NSLog(@"[v17bypass] *** vcameracrack loaded at %p slide=0x%lx path=%s",
 +          mh, (unsigned long)slide, info.dli_fname);
 +    s_vcamMh = mh;
++    s_vcamDylibName[0] = 0;
++    strncpy(s_vcamDylibName, info.dli_fname, sizeof(s_vcamDylibName) - 1);
 +
 +    // C-function hooks immediately
 +    applyCHooks(mh);
@@ -2449,6 +2526,11 @@ index 9bc858c..7bab8e6 100644
 +static void v16_init(void) {
 +    NSString *proc = [[NSProcessInfo processInfo] processName];
 +    NSLog(@"[v16bypass] ctor in process: %@", proc);
++    // [PATCH-v36] 枚举已加载 image, 打印含 vcam 的 (诊断 vcameracrack 加载情况)
++    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
++        const char *nm = _dyld_get_image_name(i);
++        if (nm && strstr(nm, "vcam")) NSLog(@"[v36bypass] loaded: %s", nm);
++    }
 +    _dyld_register_func_for_add_image(onImageLoad);
 +    NSLog(@"[v16bypass] dyld add_image callback registered");
 +
@@ -2495,6 +2577,22 @@ index 9bc858c..7bab8e6 100644
 +    if (seckey)   *seckey   = gHookSecKey;
 +    if (photoenc) *photoenc = gHookPhotoEnc;
 +    return (s_didObjCSwizzle && s_didCFunctionHooks && gHookGate2 && gHookSecKey) ? YES : NO;
++}
++
++// [PATCH-v36] 引擎是否匹配到 vcam dylib (跨进程: 读 status 文件第 11 字段)
++int vcam_bypass_engine_detected(void) {
++    @try {
++        NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:VCAM_STATUS error:nil];
++        if (attr) {
++            NSTimeInterval age = CACurrentMediaTime() - [attr[NSFileModificationDate] timeIntervalSince1970];
++            if (age < 2.0) {
++                NSString *content = [NSString stringWithContentsOfFile:VCAM_STATUS encoding:NSUTF8StringEncoding error:nil];
++                NSArray *p = [content componentsSeparatedByString:@","];
++                if (p.count >= 11) return [p[10] intValue];
++            }
++        }
++    } @catch (NSException *e) {}
++    return s_vcamMh ? 1 : 0;
 +}
 +BOOL vcam_bypass_set_replace(BOOL on) {
 +    gReplaceEnabled = on ? 1 : 0;
