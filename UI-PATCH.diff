@@ -1219,7 +1219,7 @@ index 4fe9530..f50085d 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..ad6ef07 100644
+index 9bc858c..7bab8e6 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
 @@ -1,370 +1,1007 @@
@@ -2063,35 +2063,6 @@ index 9bc858c..ad6ef07 100644
 +}
 +
 +
-+// ===== [PATCH-v35] 引擎状态回写文件 (跨进程检测修复: UI 读 mediaserverd 真实状态) =====
-+// 原因: vcam_bypass_status 在 SpringBoard 读本进程 globals, 永远 0/5 → 面板误导.
-+// 现在 mediaserverd 引擎每 0.5s 写 status 文件, UI 读文件得真实值.
-+int vcam_bypass_source_mode(void);  // 前向声明 (定义见文件后部 extern "C" 块)
-+static void v35_startStatusReporter(void) {
-+    static int s_started = 0;
-+    if (s_started) return;
-+    s_started = 1;
-+    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
-+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
-+    dispatch_source_set_timer(timer,
-+                              dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
-+                              500 * NSEC_PER_MSEC,
-+                              100 * NSEC_PER_MSEC);
-+    dispatch_source_set_event_handler(timer, ^{
-+        @try {
-+            NSFileManager *fm = [NSFileManager defaultManager];
-+            [fm createDirectoryAtPath:VCAM_DIR withIntermediateDirectories:YES attributes:nil error:nil];
-+            NSString *line = [NSString stringWithFormat:@"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-+                s_didObjCSwizzle, s_didCFunctionHooks, gHookGate2, gHookSecKey, gHookPhotoEnc,
-+                gReplaceEnabled, gColorInject, vcam_bypass_source_mode(), gVideoPaused,
-+                gActionActive];
-+            [line writeToFile:VCAM_STATUS atomically:YES encoding:NSUTF8StringEncoding error:nil];
-+        } @catch (NSException *e) {}
-+    });
-+    dispatch_resume(timer);
-+    NSLog(@"[v35bypass] engine status reporter started (500ms)");
-+}
-+
 +// ============== Replacement IMPs ==============
 +
 +static BOOL r_isLicenseValid(id self, SEL _cmd) { return YES; }
@@ -2267,6 +2238,35 @@ index 9bc858c..ad6ef07 100644
 +static int s_didCFunctionHooks = 0;
 +static int s_didObjCSwizzle = 0;
 +static const struct mach_header *s_vcamMh = NULL;
++
++// ===== [PATCH-v35] 引擎状态回写文件 (跨进程检测修复: UI 读 mediaserverd 真实状态) =====
++// 原因: vcam_bypass_status 在 SpringBoard 读本进程 globals, 永远 0/5 → 面板误导.
++// 现在 mediaserverd 引擎每 0.5s 写 status 文件, UI 读文件得真实值.
++static void v35_startStatusReporter(void) {
++    static int s_started = 0;
++    if (s_started) return;
++    s_started = 1;
++    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
++    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
++    dispatch_source_set_timer(timer,
++                              dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC),
++                              500 * NSEC_PER_MSEC,
++                              100 * NSEC_PER_MSEC);
++    dispatch_source_set_event_handler(timer, ^{
++        @try {
++            NSFileManager *fm = [NSFileManager defaultManager];
++            [fm createDirectoryAtPath:VCAM_DIR withIntermediateDirectories:YES attributes:nil error:nil];
++            int sm = vcam_videoExists() ? 1 : (vcam_imageExists() ? 2 : 0);
++            NSString *line = [NSString stringWithFormat:@"%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
++                s_didObjCSwizzle, s_didCFunctionHooks, gHookGate2, gHookSecKey, gHookPhotoEnc,
++                gReplaceEnabled, gColorInject, sm, gVideoPaused,
++                gActionActive];
++            [line writeToFile:VCAM_STATUS atomically:YES encoding:NSUTF8StringEncoding error:nil];
++        } @catch (NSException *e) {}
++    });
++    dispatch_resume(timer);
++    NSLog(@"[v35bypass] engine status reporter started (500ms)");
++}
 +
 +// vcam125 globals (offsets from dylib base, found via static reverse)
 +//   g_isLicenseValid  byte @ 0x63ab4
