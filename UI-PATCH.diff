@@ -56,7 +56,7 @@ index 3fdd407..c938436 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..4655fd2 100644
+index 4fe9530..144a376 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,29 @@
@@ -396,19 +396,19 @@ index 4fe9530..4655fd2 100644
 +        b.transform = CGAffineTransformMakeScale(0.9, 0.9);
 +        b.alpha = 0.7;
 +    } completion:nil];
-+}
+ }
 +- (void)btnUp:(UIButton *)b {
 +    [UIView animateWithDuration:0.12 delay:0 options:UIViewAnimationOptionBeginFromCurrentState animations:^{
 +        b.transform = CGAffineTransformIdentity;
 +        b.alpha = 1.0;
 +    } completion:nil];
- }
++}
 +
 +// ---- 状态行 (STATUS 页) ----
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +372,712 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +372,722 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
@@ -581,7 +581,7 @@ index 4fe9530..4655fd2 100644
 +        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
 +    [pg3 addSubview:actAdd]; [pg3 addSubview:actStop];
 +    [_pages addSubview:pg3];
- 
++
 +    // ================= LOG 页 (v37: 完整运行日志, engine.log 落盘可见) =================
 +    UIView *pg4 = [[UIView alloc] initWithFrame:CGRectMake(cw * 3, 0, cw, 394)];
 +    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(20, 6, cw - 40, 13)];
@@ -610,7 +610,7 @@ index 4fe9530..4655fd2 100644
 +        to:[UIColor colorWithRed:0.88 green:0.11 blue:0.28 alpha:1]];
 +    [pg4 addSubview:logRefresh]; [pg4 addSubview:logCopy]; [pg4 addSubview:logClear];
 +    [_pages addSubview:pg4];
-+
+ 
 +    // ================= FUNC 页: 2x3 网格功能键 (等宽等距) =================
 +    CGFloat bw = (cw - 40 - 12) / 2;
 +    CGFloat bh = 52;
@@ -775,11 +775,21 @@ index 4fe9530..4655fd2 100644
 +    if (tag >= 100 && tag < 106) { [self onColor:(int)(tag - 100)]; }
 +}
 +
-+// [PATCH-v37] 日志页刷新: engine.log 全文 + 本进程内存缓冲
++// [PATCH-v37] 日志页刷新: engine.log 全文 + 本进程内存缓冲 + 引擎心跳
 +- (void)refreshLogs {
 +    NSString *engine = vcam_bypass_engine_log();
 +    NSString *local = vcam_bypass_logs();
++    // [PATCH-v38] 引擎心跳: status 文件由 mediaserverd 每 0.5s 写, 过期 = 引擎未运行
++    BOOL engineAlive = NO;
++    NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:@"/var/jb/var/mobile/Library/vcamplus/status" error:nil];
++    if (attr) {
++        NSTimeInterval age = CACurrentMediaTime() - [attr[NSFileModificationDate] timeIntervalSince1970];
++        engineAlive = age < 3.0;
++    }
 +    NSMutableString *m = [NSMutableString new];
++    [m appendString:engineAlive
++        ? @"▶ 引擎状态: [mediaserverd] 运行中 ✓\n"
++        : @"▶ 引擎状态: [mediaserverd] 未运行 ✗ (tweak 未注入引擎进程 → 所有功能不可用)\n"];
 +    [m appendString:@"━━━ 完整运行日志 (engine.log) ━━━\n"];
 +    [m appendString:engine ?: @"(无)"];
 +    if (local.length) {
@@ -1249,7 +1259,7 @@ index 4fe9530..4655fd2 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1154,15 @@ void vcToggleMenu(void) {
+@@ -499,21 +1164,15 @@ void vcToggleMenu(void) {
  }
  
  // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
@@ -1274,7 +1284,7 @@ index 4fe9530..4655fd2 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -547,16 +1196,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1206,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
@@ -1303,10 +1313,10 @@ index 4fe9530..4655fd2 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..36a1351 100644
+index 9bc858c..6fab12f 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1161 @@
+@@ -1,370 +1,1177 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -1701,6 +1711,9 @@ index 9bc858c..36a1351 100644
 +#import <CoreImage/CoreImage.h>
 +#import <CoreMedia/CoreMedia.h>
 +#import <QuartzCore/QuartzCore.h>
++#import <sys/file.h>
++#import <fcntl.h>
++#import <unistd.h>
 +
 +// [PATCH-v36] Mach-O 段边界校验: vcam125 偏移是静态逆向固定值, 若千面升级导致
 +// 偏移错位, 直接写/挂错地址 = EXC_BAD_ACCESS (信号级, @try 拦不住) → mediaserverd
@@ -1740,20 +1753,33 @@ index 9bc858c..36a1351 100644
 +static volatile int gLogHead = 0, gLogCount = 0;
 +// [PATCH-v37] 统一日志落盘: 所有进程 (mediaserverd 引擎 + SpringBoard UI) 的关键事件
 +// 追加写 engine.log (限 300 行), 面板「日志」页读取 → 软件内可见完整运行日记.
++// v38: flock 加锁防止 SpringBoard/mediaserverd 并发写互相覆盖丢行.
 +static void vcam_persistLog(const char *line) {
 +    @try {
-+        NSFileManager *fm = [NSFileManager defaultManager];
-+        [fm createDirectoryAtPath:@"/var/jb/var/mobile/Library/vcamplus" withIntermediateDirectories:YES attributes:nil error:nil];
++        NSString *dir = @"/var/jb/var/mobile/Library/vcamplus";
++        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
++        const char *path = "/var/jb/var/mobile/Library/vcamplus/engine.log";
++        int fd = open(path, O_CREAT | O_RDWR, 0644);
++        if (fd < 0) return;
++        flock(fd, LOCK_EX);
++        NSMutableString *all = [NSMutableString new];
++        char buf[4096];
++        ssize_t n;
++        while ((n = read(fd, buf, sizeof(buf))) > 0) {
++            [all appendString:[[NSString alloc] initWithBytes:buf length:(NSUInteger)n encoding:NSUTF8StringEncoding]];
++        }
 +        NSString *proc = [[NSProcessInfo processInfo] processName];
-+        NSString *existing = [NSString stringWithContentsOfFile:@"/var/jb/var/mobile/Library/vcamplus/engine.log"
-+                                                        encoding:NSUTF8StringEncoding error:nil];
-+        NSMutableArray *ls = [NSMutableArray array];
-+        if (existing.length) [ls addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
-+        [ls addObject:[NSString stringWithFormat:@"[%@] %s", proc, line]];
-+        while ((int)ls.count > 300) [ls removeObjectAtIndex:0];
-+        [[ls componentsJoinedByString:@"\n"]
-+            writeToFile:@"/var/jb/var/mobile/Library/vcamplus/engine.log"
-+            atomically:YES encoding:NSUTF8StringEncoding error:nil];
++        [all appendFormat:@"[%@] %s\n", proc, line];
++        NSArray *ls = [all componentsSeparatedByString:@"\n"];
++        if (ls.count > 300) ls = [ls subarrayWithRange:NSMakeRange(ls.count - 300, 300)];
++        NSString *out = [ls componentsJoinedByString:@"\n"];
++        const char *cstr = [out UTF8String];
++        ftruncate(fd, 0);
++        lseek(fd, 0, SEEK_SET);
++        ssize_t w = write(fd, cstr, strlen(cstr));
++        flock(fd, LOCK_UN);
++        close(fd);
++        (void)w;
 +    } @catch (NSException *e) {}
 +}
 +static void vcam_log2(const char *fmt, ...) {
