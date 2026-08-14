@@ -2,7 +2,7 @@ Package: com.vcampro.bypass
 Name: VCam Pro Bypass
 Version: 1.1.0
 Architecture: iphoneos-arm64
-Depends: firmware (>= 15.0), com.roothide.patchloader
+Depends: firmware (>= 15.0), mobilesubstrate
 Recommends: com.taokk3.qianmian
 Description: VCam Pro 相机画面替换引擎 (RootHide DynamicPatches). PatchLoader 注入 mediaserverd (全局相机管线: hook BWNodeOutput.emitSampleBuffer + BWStillImageScalerNode/BWPhotoEncoderNode.renderSampleBuffer 替换输出) + SpringBoard (浮球控制面板: 视频/图片/颜色注入/旋转/暂停/动作). 不再依赖 vcameracrack 内部类.
 Author: vcampro
