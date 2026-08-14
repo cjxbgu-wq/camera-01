@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v1.2.0 (2026-08-14)
+
+### 修复 (核心: 相机替换全部功能)
+- fix: 千面引擎进程错位 — 千面 (com.taokk3.qianmian) 的 vcameracrack.plist 注入
+  mediaserverd + SpringBoard + **com.apple.lskdd** 三进程, 实测 RootHide 环境
+  daemon 不注入 → vcameracrack 只在 **lskdd App 进程** 加载 (千面自测替换成功,
+  我们的引擎却只注入 mediaserverd+SpringBoard → hook 全空 → 所有功能不可用).
+  v39: `vcampro-bypass.plist` Filter 增加 com.apple.lskdd/lskdd, 引擎进真实
+  引擎进程 → 替换/视频/图片/颜色/旋转/暂停/动作全部走通.
+- fix: 状态回写进程判定 — v35 状态回写原按进程名 mediaserverd 启动, 现改为
+  onImageLoad 匹配到 vcameracrack 后启动 (真实引擎进程), status 文件不再假 0/5.
+
 ## v1.1.10 (2026-08-14)
 
 ### 修复
