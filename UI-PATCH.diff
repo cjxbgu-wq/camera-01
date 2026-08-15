@@ -1343,7 +1343,7 @@ index 4fe9530..52eb585 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..7686fec 100644
+index 9bc858c..54c2b90 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
 @@ -1,370 +1,1074 @@
@@ -2127,18 +2127,18 @@ index 9bc858c..7686fec 100644
 +    CGFloat srcW = ext.size.width, srcH = ext.size.height;
 +    if (srcW <= 0 || srcH <= 0 || targetW == 0 || targetH == 0) return img;
 +    if ((size_t)srcW == targetW && (size_t)srcH == targetH) return img;
++    // [PATCH-v50] 对齐千面: AspectFill 居中裁剪, 无黑边 (千面 getRotateBuffer 旋转后
++    // 填充目标, 不合成黑背景 → 黑边=用户所见"黑屏", 16:9 视频进 4:3 竖屏黑边巨大)
 +    CGFloat sx = (CGFloat)targetW / srcW;
 +    CGFloat sy = (CGFloat)targetH / srcH;
-+    CGFloat scale = MIN(sx, sy);
++    CGFloat scale = MAX(sx, sy);
 +    CGFloat scaledW = srcW * scale;
 +    CGFloat scaledH = srcH * scale;
 +    img = [img imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
 +    CGFloat tx = ((CGFloat)targetW - scaledW) / 2.0 - ext.origin.x * scale;
 +    CGFloat ty = ((CGFloat)targetH - scaledH) / 2.0 - ext.origin.y * scale;
 +    img = [img imageByApplyingTransform:CGAffineTransformMakeTranslation(tx, ty)];
-+    CIImage *bg = [[CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:1]]
-+                   imageByCroppingToRect:CGRectMake(0, 0, (CGFloat)targetW, (CGFloat)targetH)];
-+    return [img imageByCompositingOverImage:bg];
++    return img; // 超出部分由 CIContext render 到目标尺寸裁剪, 无黑边
 +}
 +
 +// 颜色注入: 全屏 RGB+alpha 叠加 (主源码 vcam_applyColorInject 简化版, 无 Vision 人脸检测)
