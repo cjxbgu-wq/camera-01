@@ -1314,10 +1314,10 @@ index 4fe9530..c3080f1 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..c9d39fa 100644
+index 9bc858c..6f2154c 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,999 @@
+@@ -1,370 +1,1040 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2279,32 +2279,73 @@ index 9bc858c..c9d39fa 100644
 +
 +// 轮询挂系统 hook: 类可能相机激活时才出现 → 每 1s 重试, 不放弃
 +static int s_didSystemHook = 0;
++
++// ===== [PATCH-v46] hook 机制对齐千面 (反编译实证: 千面 6 处全部 MSHookMessageEx) =====
++// 千面经真机验证可用: MSHookMessageEx (substrate, ptrauth 安全) 优于 method_setImplementation.
++// 为不引入构建配置变更 (Makefile 无 -lsubstrate): 运行期 dlsym 解析 substrate API,
++// 进程已加载 CydiaSubstrate (DynamicLibraries 注入) 时优先使用; 无 substrate 回退 v42 机制.
++typedef void (*MSHookMessageExFn)(Class _class, SEL message, IMP hook, IMP *old);
++static MSHookMessageExFn g_MSHookMessageEx = NULL;
++static BOOL g_v46UseMSHook = NO;
++static void v46_initHookAPI(void) {
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++        g_MSHookMessageEx = (MSHookMessageExFn)dlsym(RTLD_DEFAULT, "MSHookMessageEx");
++        if (g_MSHookMessageEx) {
++            g_v46UseMSHook = YES;
++            vcam_log2("v46 MSHookMessageEx API resolved (Qianmian-style ptrauth hook)");
++        } else {
++            vcam_log2("v46 MSHookMessageEx NOT found — fallback method_setImplementation");
++        }
++    });
++}
++static IMP g_v46OldEmit = NULL, g_v46OldPhotoEnc = NULL, g_v46OldStill = NULL;
++
 +static void v42_hookSystem(void) {
 +    if (s_didSystemHook) return;
++    v46_initHookAPI();
 +    Class cls = NULL;
 +    Method m = NULL;
 +    cls = objc_getClass("BWNodeOutput");
 +    if (cls && (m = class_getInstanceMethod(cls, sel_registerName("emitSampleBuffer:")))) {
 +        if (method_getImplementation(m) != (IMP)v42_emitSampleBuffer) {
-+            method_setImplementation(m, (IMP)v42_emitSampleBuffer);
++            if (g_v46UseMSHook) {
++                g_MSHookMessageEx(cls, sel_registerName("emitSampleBuffer:"),
++                                  (IMP)v42_emitSampleBuffer, &g_v46OldEmit);
++            } else {
++                method_setImplementation(m, (IMP)v42_emitSampleBuffer);
++            }
 +            gHookGate2 = 1;
-+            vcam_log2("v42 hooked -[BWNodeOutput emitSampleBuffer:]");
++            vcam_log2("v42 hooked -[BWNodeOutput emitSampleBuffer:] (%s)",
++                      g_v46UseMSHook ? "MSHookMessageEx" : "runtime");
 +        }
 +    }
 +    cls = objc_getClass("BWPhotoEncoderNode");
 +    if (cls && (m = class_getInstanceMethod(cls, sel_registerName("renderSampleBuffer:forInput:")))) {
 +        if (method_getImplementation(m) != (IMP)v42_renderSBForInput) {
-+            method_setImplementation(m, (IMP)v42_renderSBForInput);
++            if (g_v46UseMSHook) {
++                g_MSHookMessageEx(cls, sel_registerName("renderSampleBuffer:forInput:"),
++                                  (IMP)v42_renderSBForInput, &g_v46OldPhotoEnc);
++            } else {
++                method_setImplementation(m, (IMP)v42_renderSBForInput);
++            }
 +            gHookSecKey = 1;
-+            vcam_log2("v42 hooked -[BWPhotoEncoderNode renderSampleBuffer:forInput:]");
++            vcam_log2("v42 hooked -[BWPhotoEncoderNode renderSampleBuffer:forInput:] (%s)",
++                      g_v46UseMSHook ? "MSHookMessageEx" : "runtime");
 +        }
 +    }
 +    cls = objc_getClass("BWStillImageScalerNode");
 +    if (cls && (m = class_getInstanceMethod(cls, sel_registerName("renderSampleBuffer:forInput:")))) {
 +        if (method_getImplementation(m) != (IMP)v42_renderSBForInput) {
-+            method_setImplementation(m, (IMP)v42_renderSBForInput);
++            if (g_v46UseMSHook) {
++                g_MSHookMessageEx(cls, sel_registerName("renderSampleBuffer:forInput:"),
++                                  (IMP)v42_renderSBForInput, &g_v46OldStill);
++            } else {
++                method_setImplementation(m, (IMP)v42_renderSBForInput);
++            }
 +            gHookPhotoEnc = 1;
-+            vcam_log2("v42 hooked -[BWStillImageScalerNode renderSampleBuffer:forInput:]");
++            vcam_log2("v42 hooked -[BWStillImageScalerNode renderSampleBuffer:forInput:] (%s)",
++                      g_v46UseMSHook ? "MSHookMessageEx" : "runtime");
 +        }
 +    }
 +    if (gHookGate2 || gHookSecKey || gHookPhotoEnc) {
