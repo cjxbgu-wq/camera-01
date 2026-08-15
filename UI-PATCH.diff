@@ -1314,10 +1314,10 @@ index 4fe9530..c3080f1 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..6f2154c 100644
+index 9bc858c..f2faeb5 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1040 @@
+@@ -1,370 +1,1054 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2303,6 +2303,15 @@ index 9bc858c..6f2154c 100644
 +
 +static void v42_hookSystem(void) {
 +    if (s_didSystemHook) return;
++    // [PATCH-v47] 进程守卫 (严格对齐千面 ctor 分流 — 反编译实证):
++    // 千面 SB 分支只挂 SpringBoard/VolumeControl (音量键/UI), BW 相机节点 hook
++    // 只在 mediaserverd 分支注册. 我们 v46 之前无守卫 → SpringBoard 进程内也挂上
++    // BW hook → SB 侧相机管线 (锁屏相机/相机 widget/相册预览) 被替换函数拦截且
++    // 不调 orig → 真机实测相机黑屏. 现在 BW hook 限定 mediaserverd.
++    @autoreleasepool {
++        NSString *proc = [[NSProcessInfo processInfo] processName];
++        if (![proc isEqualToString:@"mediaserverd"]) return;
++    }
 +    v46_initHookAPI();
 +    Class cls = NULL;
 +    Method m = NULL;
@@ -2516,6 +2525,11 @@ index 9bc858c..6f2154c 100644
 +}
 +
 +static void v41_startProbe(void) {
++    // [PATCH-v47] 只在 mediaserverd 跑探测 (千面无 probe; SB 侧 probe 刷屏 engine.log 且无意义)
++    @autoreleasepool {
++        NSString *proc = [[NSProcessInfo processInfo] processName];
++        if (![proc isEqualToString:@"mediaserverd"]) return;
++    }
 +    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
 +                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
 +        v41_probeOnce(1);
