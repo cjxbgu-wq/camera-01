@@ -35,7 +35,7 @@ index 3fdd407..c938436 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..255c263 100644
+index 4fe9530..52eb585 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,51 @@
@@ -99,8 +99,11 @@ index 4fe9530..255c263 100644
  void vcToggleMenu(void);
  void vcHideMenu(void);
  void vcHideBall(void);
-@@ -33,6 +60,41 @@ static NSTimeInterval sUpT  = 0;
- static NSTimeInterval sDnT  = 0;
+@@ -30,9 +57,43 @@ void vcShowBall(void);
+ static VCBall *sBallView  = nil;
+ static VCMenuVC *sMenuVC  = nil;
+ static NSTimeInterval sUpT  = 0;
+-static NSTimeInterval sDnT  = 0;
  static BOOL sInstalled      = NO;
  
 +// [PATCH-v34] VCActionSystem 动作页状态 (actions.json 同 schema: {id,name,start,end,loop,speed})
@@ -141,7 +144,7 @@ index 4fe9530..255c263 100644
  static UIColor *vcStateColor(void) {
      int sw = 0, cf = 0, g2 = 0, sk = 0, pe = 0;
      vcam_bypass_status(&sw, &cf, &g2, &sk, &pe);
-@@ -85,6 +147,104 @@ static UIColor *vcStateColor(void) {
+@@ -85,6 +146,104 @@ static UIColor *vcStateColor(void) {
  - (void)onTap { vcToggleMenu(); }
  @end
  
@@ -246,7 +249,7 @@ index 4fe9530..255c263 100644
  // ============================================================
  #pragma mark - 菜单面板
  // ============================================================
-@@ -93,43 +253,60 @@ static uint32_t vcColorTable[] = {
+@@ -93,43 +252,60 @@ static uint32_t vcColorTable[] = {
      0xFFFF0000, 0xFF00FF00, 0xFF0000FF,
      0xFFFFFF00, 0xFF00FFFF, 0xFFFFFFFF
  };
@@ -324,7 +327,7 @@ index 4fe9530..255c263 100644
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(7, 2, w - 14, 9)];
      lab.text = l;
      lab.font = [UIFont systemFontOfSize:7];
-@@ -144,45 +321,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -144,45 +320,65 @@ static UIColor *vcBgraToUI(uint32_t c) {
      [host addSubview:box];
      return valL;
  }
@@ -409,7 +412,7 @@ index 4fe9530..255c263 100644
  - (void)mkStatusRow:(UIView *)host y:(CGFloat)y label:(NSString *)l tag:(int)tag {
      UILabel *lab = [[UILabel alloc] initWithFrame:CGRectMake(20, y, 200, 14)];
      lab.text = l;
-@@ -197,232 +394,721 @@ static UIColor *vcBgraToUI(uint32_t c) {
+@@ -197,232 +393,721 @@ static UIColor *vcBgraToUI(uint32_t c) {
      _stVal[tag - 1] = val;
  }
  
@@ -1260,7 +1263,7 @@ index 4fe9530..255c263 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -498,22 +1184,17 @@ void vcToggleMenu(void) {
+@@ -498,22 +1183,17 @@ void vcToggleMenu(void) {
      if (sMenuVC && sMenuVC.presentingViewController) { vcHideMenu(); } else { vcShowMenu(); }
  }
  
@@ -1288,7 +1291,7 @@ index 4fe9530..255c263 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
-@@ -524,17 +1205,16 @@ static void vcVolumeInstall(void) {
+@@ -524,17 +1204,16 @@ static void vcVolumeInstall(void) {
              @try { if (origUp) origUp(self, selUp); }
              @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
              NSTimeInterval now = CACurrentMediaTime();
@@ -1311,7 +1314,7 @@ index 4fe9530..255c263 100644
          }));
          NSLog(@"[vcbUI] volume hooks installed (direct IMP, ref-style)");
      } @catch (NSException *e) {
-@@ -547,16 +1227,18 @@ void vcap_ui_mount(void) {
+@@ -547,16 +1226,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
          NSString *proc = [[NSProcessInfo processInfo] processName];
