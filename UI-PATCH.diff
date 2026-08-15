@@ -35,7 +35,7 @@ index 3fdd407..c938436 100644
  void vcap_ui_mount(void);                       // 仅 SpringBoard 生效
  
 diff --git a/Modules/VCamBypassUI.m b/Modules/VCamBypassUI.m
-index 4fe9530..c3080f1 100644
+index 4fe9530..255c263 100644
 --- a/Modules/VCamBypassUI.m
 +++ b/Modules/VCamBypassUI.m
 @@ -1,24 +1,51 @@
@@ -618,7 +618,7 @@ index 4fe9530..c3080f1 100644
 +    CGFloat gap = 12;
 +    CGFloat lx = 20, rx = 20 + bw + gap;
 +    CGFloat y0 = 8;
-+
+ 
 +    UIButton *b1 = [self mkBtn:@"选择视频" tag:1 x:lx y:y0 w:bw h:bh font:11
 +        from:[UIColor colorWithRed:0.20 green:0.83 blue:0.60 alpha:1]
 +        to:[UIColor colorWithRed:0.02 green:0.59 blue:0.41 alpha:1]];
@@ -640,7 +640,7 @@ index 4fe9530..c3080f1 100644
 +    [pg1 addSubview:b1]; [pg1 addSubview:b2];
 +    [pg1 addSubview:b3]; [pg1 addSubview:b4];
 +    [pg1 addSubview:_btnPause]; [pg1 addSubview:_btnReplace];
- 
++
 +    // 6 色块 3x2 (图案颜色)
      for (int i = 0; i < 6; i++) {
          UIButton *cb = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -1260,14 +1260,17 @@ index 4fe9530..c3080f1 100644
  
  // 对齐参考工程 vcam_topVC(): 遍历 scenes 找 keyWindow → rootVC → presented 链
  static UIViewController *vcTopVC(void) {
-@@ -499,21 +1185,15 @@ void vcToggleMenu(void) {
+@@ -498,22 +1184,17 @@ void vcToggleMenu(void) {
+     if (sMenuVC && sMenuVC.presentingViewController) { vcHideMenu(); } else { vcShowMenu(); }
  }
  
- // 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
+-// 音量键入口: 对齐本地参考工程(朋友版 UI 源码)的写法.
 -// 原实现直接强转调用 (F)method_getImplementation(m) —— runtime 返回的 IMP
 -// 已带 ptrauth 签名, 在 arm64e (iPhone XS+) 安全;
 -// 不要用 method_invoke: 它在 arm64e 上对 IMP 签名处理不当会崩 SpringBoard
 -// (症状: 按音量键屏幕黑屏/锁屏).
++// 音量键入口: 对齐千面 (FACT 0x229be "Double click volume UP detected!").
++// 千面: 双击音量上键 -> 悬浮球/面板; 音量下键不参与.
 +// 直接强转调用 (F)method_getImplementation(m) —— runtime 返回的 IMP 已带
 +// ptrauth 签名, 在 arm64e (iPhone XS+) 安全; 不要用 method_invoke
 +// (arm64e 上 IMP 签名处理不当会崩 SpringBoard: 按音量键黑屏/锁屏).
@@ -1285,6 +1288,29 @@ index 4fe9530..c3080f1 100644
          if (!up || !dn) { NSLog(@"[vcbUI] volume methods missing, skip"); return; }
          typedef void (*vcVolFn)(id, SEL);
          vcVolFn origUp = (vcVolFn)method_getImplementation(up);
+@@ -524,17 +1205,16 @@ static void vcVolumeInstall(void) {
+             @try { if (origUp) origUp(self, selUp); }
+             @catch (NSException *e) { NSLog(@"[vcbUI] up orig fail: %@", e); }
+             NSTimeInterval now = CACurrentMediaTime();
+-            if (sDnT > 0 && (now - sDnT) < 1.5) { sUpT = sDnT = 0;
+-                dispatch_async(dispatch_get_main_queue(), ^{ vcShowBall(); }); }
++            if (sUpT > 0 && (now - sUpT) < 0.6) { sUpT = 0;
++                // [PATCH-v48] 双击音量上 -> 面板 (千面对齐)
++                dispatch_async(dispatch_get_main_queue(), ^{ vcToggleMenu(); });
++                NSLog(@"[vcbUI] double volume UP -> panel");
++            }
+             else sUpT = now;
+         }));
+         method_setImplementation(dn, imp_implementationWithBlock(^(id self) {
+             @try { if (origDn) origDn(self, selDn); }
+             @catch (NSException *e) { NSLog(@"[vcbUI] dn orig fail: %@", e); }
+-            NSTimeInterval now = CACurrentMediaTime();
+-            if (sUpT > 0 && (now - sUpT) < 1.5) { sUpT = sDnT = 0;
+-                dispatch_async(dispatch_get_main_queue(), ^{ vcToggleMenu(); }); }
+-            else sDnT = now;
+         }));
+         NSLog(@"[vcbUI] volume hooks installed (direct IMP, ref-style)");
+     } @catch (NSException *e) {
 @@ -547,16 +1227,18 @@ void vcap_ui_mount(void) {
          if (sInstalled) return;
          sInstalled = YES;
