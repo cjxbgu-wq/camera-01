@@ -1,0 +1,28 @@
+patching file 'Modules/VCamBypassUI.h'
+patching file 'Modules/VCamBypassUI.m'
+patching file Tweak.xm
+6684d6ec487f493049a05438d758f0244f15c146  Tweak.xm
+7f0452a3aa11cf6fd57e6fb9ffc918d76f136e39  Makefile
+6ad7f44dee159a07dc8d3188cf12fb51ed8dc978  Modules/VCamBypassUI.m
+[0;36m==> [1;36mNotice:[m Build may be slow as Theos isn’t using all available CPU cores on this computer. Consider upgrading GNU Make: https://theos.dev/docs/parallel-building
+[1;31m> [1;3;39mMaking all for tweak vcampro-bypass…[m
+[0;31m==> [1;39mPreprocessing Tweak.xm…[m
+[0;32m==> [1;39mCompiling Tweak.xm (arm64)…[m
+[0;32m==> [1;39mCompiling Modules/VCamBypassUI.m (arm64)…[m
+[0;33m==> [1;39mLinking tweak vcampro-bypass (arm64)…[m
+ld: warning: -multiply_defined is obsolete
+[0;34m==> [1;39mGenerating debug symbols for vcampro-bypass…[m
+warning: no debug symbols in executable (-arch arm64)
+[0;34m==> [1;39mStripping vcampro-bypass (arm64)…[m
+[0;31m==> [1;39mPreprocessing Tweak.xm…[m
+[0;32m==> [1;39mCompiling Tweak.xm (arm64e)…[m
+[0;32m==> [1;39mCompiling Modules/VCamBypassUI.m (arm64e)…[m
+[0;33m==> [1;39mLinking tweak vcampro-bypass (arm64e)…[m
+ld: warning: -multiply_defined is obsolete
+[0;34m==> [1;39mGenerating debug symbols for vcampro-bypass…[m
+warning: no debug symbols in executable (-arch arm64e)
+[0;34m==> [1;39mStripping vcampro-bypass (arm64e)…[m
+[0;34m==> [1;39mMerging tweak vcampro-bypass…[m
+[0;34m==> [1;39mSigning vcampro-bypass…[m
+[1;31m> [1;3;39mMaking stage for tweak vcampro-bypass…[m
+dm.pl: building package `com.vcampro.bypass:iphoneos-arm64' in `./packages/com.vcampro.bypass_1.1.0_iphoneos-arm64.deb'
