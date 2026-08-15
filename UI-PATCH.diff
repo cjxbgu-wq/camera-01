@@ -1343,7 +1343,7 @@ index 4fe9530..52eb585 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..950558a 100644
+index 9bc858c..bea8f7c 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
 @@ -1,370 +1,1148 @@
@@ -2480,11 +2480,11 @@ index 9bc858c..950558a 100644
 +            VTPixelRotationSessionRef sess = NULL;
 +            OSStatus s = VTPixelRotationSessionCreate(kCFAllocatorDefault, &sess);
 +            if (s != noErr) { vcam_log2_rare("rot", "VTPixelRotationSessionCreate failed: %d", (int)s); return NULL; }
-+            CFNumberRef ang = NULL;
-+            if (angle == 90) ang = kVTImageRotationAngle_90;
-+            else if (angle == 180) ang = kVTImageRotationAngle_180;
-+            else ang = kVTImageRotationAngle_270;
-+            VTSessionSetProperty(sess, kVTPixelRotationPropertyKey_Rotation, ang);
++            // 千面同款: kVTPixelRotationPropertyKey_Rotation 取值 0=0° 1=90° 2=180° 3=270° (CFNumber)
++            int rotVal = (angle == 90) ? 1 : (angle == 180) ? 2 : 3;
++            CFNumberRef deg = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &rotVal);
++            VTSessionSetProperty(sess, kVTPixelRotationPropertyKey_Rotation, deg);
++            CFRelease(deg);
 +            s_rotSessions[idx] = sess;
 +        } else {
 +            return NULL;
