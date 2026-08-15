@@ -1343,10 +1343,10 @@ index 4fe9530..52eb585 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..bea8f7c 100644
+index 9bc858c..8012ab7 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1148 @@
+@@ -1,370 +1,1146 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2312,11 +2312,9 @@ index 9bc858c..bea8f7c 100644
 +}
 +
 +static void v42_renderSBForInput(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
-+    BOOL photoenc = [NSStringFromClass([self class]) hasPrefix:@"BWPhotoEncoder"];
-+    BOOL still    = [NSStringFromClass([self class]) hasPrefix:@"BWStillImageScaler"];
-+    // [PATCH-v49] 对齐千面: 替换只在 BWNodeOutput.emitSampleBuffer (预览路径),
-+    // 拍照路径 (PhotoEncoder/Scaler) 透传 → 防拍照黑屏 (千面 3 hook 中仅 emit 有替换逻辑)
-+    v42_maybeReplace(sb, photoenc || still);
++    // [PATCH-v52] 对齐千面 hookRenderSBForInput: PhotoEncoder/Scaler 拍照路径同样替换
++    // (千面目标格式 420f + 旋转 90, 本实现由 v23_doReplace 统一管线完成)
++    v42_maybeReplace(sb, NO);
 +}
 +
 +// 轮询挂系统 hook: 类可能相机激活时才出现 → 每 1s 重试, 不放弃
