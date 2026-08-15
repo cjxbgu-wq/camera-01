@@ -1343,10 +1343,10 @@ index 4fe9530..52eb585 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..54c2b90 100644
+index 9bc858c..950558a 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1074 @@
+@@ -1,370 +1,1148 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2458,6 +2458,54 @@ index 9bc858c..54c2b90 100644
 +// v26: 3rd party / 网页 OK (BWNodeOutput.emit, photoFlag=0). Apple Camera 黑 (BWPhotoEncoder, photoFlag=1).
 +// 所以 photoFlag=1 路径不 transfer (Apple Camera 显示真画面不黑屏).
 +// 3rd party 路径正常 transfer (看到假画面).
++// ===== [PATCH-v51] 对齐千面 VCamCore.renderReplacementToPixelBuffer: (纯 VideoToolbox) =====
++// 千面替换 = VTPixelTransferSessionTransferImage(视频原帧, 相机输出 buffer), 无 CIContext.
++// mediaserverd 是无 GPU 渲染上下文的 daemon → CIContext(kCIContextUseSoftwareRenderer:NO)
++// 渲染输出黑帧 = 黑屏根因. v51 改为纯 VT: 视频帧直接 transfer (Trim 填满裁剪, 千面同款),
++// 旋转用 VTPixelRotationSession (iOS16+, 千面 VCamCore 同款 _pixelRotationSession).
++
++static VTPixelRotationSessionRef s_rotSessions[3] = { NULL, NULL, NULL }; // 90/180/270
++
++static CVPixelBufferRef vcam_rotateVideoBuffer(CVPixelBufferRef src, int angle) {
++    if (!src) return NULL;
++    size_t w = CVPixelBufferGetWidth(src);
++    size_t h = CVPixelBufferGetHeight(src);
++    if (w == 0 || h == 0) return NULL;
++    uint32_t fmt = CVPixelBufferGetPixelFormatType(src);
++    size_t outW = (angle == 90 || angle == 270) ? h : w;
++    size_t outH = (angle == 90 || angle == 270) ? w : h;
++    int idx = (angle == 90) ? 0 : (angle == 180) ? 1 : 2;
++    if (!s_rotSessions[idx]) {
++        if (@available(iOS 16.0, *)) {
++            VTPixelRotationSessionRef sess = NULL;
++            OSStatus s = VTPixelRotationSessionCreate(kCFAllocatorDefault, &sess);
++            if (s != noErr) { vcam_log2_rare("rot", "VTPixelRotationSessionCreate failed: %d", (int)s); return NULL; }
++            CFNumberRef ang = NULL;
++            if (angle == 90) ang = kVTImageRotationAngle_90;
++            else if (angle == 180) ang = kVTImageRotationAngle_180;
++            else ang = kVTImageRotationAngle_270;
++            VTSessionSetProperty(sess, kVTPixelRotationPropertyKey_Rotation, ang);
++            s_rotSessions[idx] = sess;
++        } else {
++            return NULL;
++        }
++    }
++    NSDictionary *pba = @{
++        (NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{},
++        (NSString *)kCVPixelBufferMetalCompatibilityKey: @YES,
++    };
++    CVPixelBufferRef out = NULL;
++    CVReturn r = CVPixelBufferCreate(kCFAllocatorDefault, outW, outH, fmt, (__bridge CFDictionaryRef)pba, &out);
++    if (r != kCVReturnSuccess || !out) return NULL;
++    OSStatus rs = VTPixelRotationSessionRotateImage(s_rotSessions[idx], src, out);
++    if (rs != noErr) {
++        vcam_log2_rare("rot-err", "rotate failed: %d", (int)rs);
++        CVPixelBufferRelease(out);
++        return NULL;
++    }
++    return out;
++}
++
 +static void v23_doReplace(CVPixelBufferRef dst) {
 +    if (!dst) return;
 +    if (!gReplaceEnabled) return; // [PATCH-v32] UI 总开关 OFF: 真画面
@@ -2474,22 +2522,48 @@ index 9bc858c..54c2b90 100644
 +        }
 +        VTSessionSetProperty(s_xferSession, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_Trim);
 +        vcam_log2("VT transfer session created");
-+        // [PATCH-v49] 诊断: 替换目标 buffer 尺寸/格式 (定位黑屏: 10-bit/HDR/尺寸异常)
 +        vcam_log2_rare("dst", "replace dst %zux%zu fmt=0x%08x", w, h,
 +                       (unsigned)CVPixelBufferGetPixelFormatType(dst));
 +    }
 +
-+    // [PATCH-v33] 视频/图片源优先 (渲染器输出已合成黑边, 尺寸=目标, Trim 即可)
-+    if (vcam_imageExists() || vcam_videoExists()) {
++    // [PATCH-v51] 视频优先: 解码原帧直接 transfer (千面语义, 无 CIContext/无黑边)
++    if (vcam_videoExists()) {
++        CVPixelBufferRef frame = vcam_readVideoFrame();
++        if (frame) {
++            CVPixelBufferRef src = frame;
++            BOOL needRot = (gVideoRotation == 0 && h > w &&
++                            CVPixelBufferGetWidth(frame) > CVPixelBufferGetHeight(frame));
++            int ang = 0;
++            if (needRot) ang = 90;
++            else if (gVideoRotation == 90 || gVideoRotation == 180 || gVideoRotation == 270) ang = gVideoRotation;
++            if (ang != 0) {
++                CVPixelBufferRef rot = vcam_rotateVideoBuffer(frame, ang);
++                if (rot) src = rot;
++            }
++            OSStatus ts = VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++            if (ts == noErr) {
++                vcam_log2_rare("xfer-ok", "replaced video frame (%zux%zu%s)", w, h, ang ? " rot" : "");
++            } else {
++                vcam_log2_rare("xfer-err", "video transfer failed: %d", (int)ts);
++            }
++            if (src != frame) CVPixelBufferRelease(src);
++            CVPixelBufferRelease(frame);
++            return;
++        }
++        vcam_log2_rare("video-null", "readVideoFrame NULL (decode failed), fallback pattern");
++    }
++
++    // 图片源: 保留 CIContext 渲染 (千面无图片替换, 视频为主场景; 失败回退 pattern)
++    if (vcam_imageExists()) {
 +        CVPixelBufferRef src = vcam_renderSourceToBGRA(w, h);
 +        if (src) {
 +            OSStatus ts = VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
-+            if (ts != noErr) vcam_log2_rare("xfer-err", "transfer failed: %d", (int)ts);
-+            else vcam_log2_rare("xfer-ok", "replaced frame (%zux%zu)", w, h);
++            if (ts != noErr) vcam_log2_rare("xfer-err", "image transfer failed: %d", (int)ts);
++            else vcam_log2_rare("xfer-ok", "replaced image frame (%zux%zu)", w, h);
 +            CVPixelBufferRelease(src);
 +            return;
 +        }
-+        vcam_log2_rare("render-null", "renderSourceToBGRA returned NULL (%zux%zu) — source decode failed, fallback pattern", w, h);
++        vcam_log2_rare("render-null", "image render NULL (%zux%zu), fallback pattern", w, h);
 +    }
 +
 +    CVPixelBufferRef src = v23_getTestPattern(w, h);
