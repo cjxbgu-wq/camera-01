@@ -1343,10 +1343,10 @@ index 4fe9530..52eb585 100644
 \ No newline at end of file
 +}
 diff --git a/Tweak.xm b/Tweak.xm
-index 9bc858c..f2faeb5 100644
+index 9bc858c..7686fec 100644
 --- a/Tweak.xm
 +++ b/Tweak.xm
-@@ -1,370 +1,1054 @@
+@@ -1,370 +1,1074 @@
 -// vcam125 bypass tweak — runtime hook (NO __text disk modification)
 -//
 -// 装在 mediaserverd + SpringBoard 跟 vcameracrack.dylib 共存. 用 dyld add_image
@@ -2178,6 +2178,16 @@ index 9bc858c..f2faeb5 100644
 +            }
 +        }
 +        if (!src) return NULL;
++        // [PATCH-v49] 自动方向适配 (千面 rotateBuffer 语义): 目标竖屏且源横屏 → 自动旋 90,
++        // 减少黑边黑屏感; 用户显式设过旋转 (gVideoRotation!=0) 时尊重用户
++        if (gVideoRotation == 0 && targetH > targetW) {
++            CGRect ext0 = src.extent;
++            if (ext0.size.width > ext0.size.height) {
++                src = [src imageByApplyingOrientation:kCGImagePropertyOrientationRight];
++                vcam_log2_rare("autorot", "auto rotate 90 (src %dx%d -> dst %dx%d)",
++                               (int)ext0.size.width, (int)ext0.size.height, (int)targetW, (int)targetH);
++            }
++        }
 +        src = vcam_applyVideoTransforms(src);
 +        src = vcam_aspectFit(src, targetW, targetH);
 +        src = vcam_applyColorInject(src);
@@ -2303,7 +2313,10 @@ index 9bc858c..f2faeb5 100644
 +
 +static void v42_renderSBForInput(id self, SEL _cmd, CMSampleBufferRef sb, id input) {
 +    BOOL photoenc = [NSStringFromClass([self class]) hasPrefix:@"BWPhotoEncoder"];
-+    v42_maybeReplace(sb, photoenc);
++    BOOL still    = [NSStringFromClass([self class]) hasPrefix:@"BWStillImageScaler"];
++    // [PATCH-v49] 对齐千面: 替换只在 BWNodeOutput.emitSampleBuffer (预览路径),
++    // 拍照路径 (PhotoEncoder/Scaler) 透传 → 防拍照黑屏 (千面 3 hook 中仅 emit 有替换逻辑)
++    v42_maybeReplace(sb, photoenc || still);
 +}
 +
 +// 轮询挂系统 hook: 类可能相机激活时才出现 → 每 1s 重试, 不放弃
@@ -2461,13 +2474,18 @@ index 9bc858c..f2faeb5 100644
 +        }
 +        VTSessionSetProperty(s_xferSession, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_Trim);
 +        vcam_log2("VT transfer session created");
++        // [PATCH-v49] 诊断: 替换目标 buffer 尺寸/格式 (定位黑屏: 10-bit/HDR/尺寸异常)
++        vcam_log2_rare("dst", "replace dst %zux%zu fmt=0x%08x", w, h,
++                       (unsigned)CVPixelBufferGetPixelFormatType(dst));
 +    }
 +
 +    // [PATCH-v33] 视频/图片源优先 (渲染器输出已合成黑边, 尺寸=目标, Trim 即可)
 +    if (vcam_imageExists() || vcam_videoExists()) {
 +        CVPixelBufferRef src = vcam_renderSourceToBGRA(w, h);
 +        if (src) {
-+            VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++            OSStatus ts = VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++            if (ts != noErr) vcam_log2_rare("xfer-err", "transfer failed: %d", (int)ts);
++            else vcam_log2_rare("xfer-ok", "replaced frame (%zux%zu)", w, h);
 +            CVPixelBufferRelease(src);
 +            return;
 +        }
@@ -2480,7 +2498,9 @@ index 9bc858c..f2faeb5 100644
 +        return;
 +    }
 +
-+    VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++    OSStatus ts2 = VTPixelTransferSessionTransferImage(s_xferSession, src, dst);
++    if (ts2 != noErr) vcam_log2_rare("xfer-err", "pattern transfer failed: %d", (int)ts2);
++    else vcam_log2_rare("xfer-ok", "replaced frame pattern (%zux%zu)", w, h);
 +}
 +
 +// ============== Helpers ==============
